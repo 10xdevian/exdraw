@@ -1,0 +1,25 @@
+{
+  "name": "ws-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node dist/server",
+    "build": "tsc -p .",
+    "dev": "tsc-watch --onSuccess \"npm start\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "tsc-watch": "^7.1.1",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "ws": "^8.18.3",
+    "@repo/eslint-config": "workspace:*",
+    "@repo/typescript-config": "workspace:*"
+  }
+}
