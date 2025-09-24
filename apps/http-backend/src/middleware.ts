@@ -14,7 +14,7 @@ export const authMiddleware = (
 
   if (decode) {
     // @ts-ignore
-    req.email = decode.email;
+    req.userId = decode.userId;
     next();
   } else {
     res.status(403).json({

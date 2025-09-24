@@ -17,6 +17,7 @@
     "typescript": "^5.9.2"
   },
   "dependencies": {
+    "@repo/db":"workspace:*",
     "@types/jsonwebtoken": "^9.0.10",
     "bcryptjs": "^3.0.2",
     "dotenv": "^17.2.2",

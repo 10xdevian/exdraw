@@ -1,6 +1,28 @@
 import { WebSocketServer } from "ws";
 import jwt, { JwtPayload } from "jsonwebtoken";
+import { JWT_SECRET } from "@repo/shared";
 const wss = new WebSocketServer({ port: 8080 });
+
+interface User {
+  id: string;
+  rooms: string[];
+  ws: WebSocket;
+}
+const user: User[] = [];
+function checkUser(token: string): string | null {
+  //@ts-ignore
+  const deconde = jwt.verify(token, JWT_SECRET);
+
+  if (typeof deconde == "string") {
+    return null;
+  }
+
+  if (!deconde || !deconde.userId) {
+    return null;
+  }
+
+  return deconde.userId;
+}
 
 wss.on("connection", function connection(ws, request) {
   const url = request.url;
@@ -15,12 +37,19 @@ wss.on("connection", function connection(ws, request) {
   const token = queryParams.get("token");
 
   //@ts-ignore
-  const decond = jwt.verify(token, "ilovekiyara");
+  const userId = checkUser(token);
 
-  if (!decond || !(decond as JwtPayload).email) {
+  if (!userId) {
     ws.close();
-    return;
   }
+
+  user.push({
+    userId,
+    rooms: [],
+    //@ts-ignore
+    ws,
+  });
+
   ws.on("message", function message(data) {
     ws.send("ping" + data);
   });
