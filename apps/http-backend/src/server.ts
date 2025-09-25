@@ -8,7 +8,7 @@ const app = express();
 
 app.use(express.json());
 
-app.post("/singup", async (req, res) => {
+app.post("/signup", async (req, res) => {
   const { username, email, password } = req.body;
 
   //  check user is exists or not
@@ -83,15 +83,15 @@ app.post("/signin", async (req, res) => {
   });
 });
 
-app.get("/create-room", authMiddleware, async (req, res) => {
-  const { slug, adminId } = req.body;
+app.post("/create-room", authMiddleware, async (req, res) => {
+  const { name } = req.body;
 
   //@ts-ignore
   const userId = req.userId;
 
   const room = await prisma.room.create({
     data: {
-      slug,
+      slug: name,
       adminId: userId,
     },
   });

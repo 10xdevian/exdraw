@@ -14,11 +14,10 @@ const wss = new WebSocketServer({ port: 8080 });
 interface User {
   id: string;
   rooms: string[];
-  ws: WebSocket;
+  ws: WebSocket | any;
 }
 const users: User[] = [];
 function checkUser(token: string): string | null {
-  //@ts-ignore
   const deconde = jwt.verify(token, JWT_SECRET);
 
   if (typeof deconde == "string") {
@@ -39,12 +38,13 @@ wss.on("connection", function connection(ws, request) {
     return;
   }
 
-  //@ts-ignore
-  const queryParams = new URLSearchParams(url.split("?"[1]));
+  const queryParams = new URLSearchParams(url.split("?")[1]);
 
   const token = queryParams.get("token");
 
-  //@ts-ignore
+  if (!token) {
+    return null;
+  }
   const userId = checkUser(token);
 
   if (!userId) {
@@ -52,9 +52,8 @@ wss.on("connection", function connection(ws, request) {
   }
 
   users.push({
-    userId,
+    id: userId as unknown as string,
     rooms: [],
-    //@ts-ignore
     ws,
   });
 
@@ -62,21 +61,19 @@ wss.on("connection", function connection(ws, request) {
     const parsedData = JSON.parse(data as unknown as string);
 
     if (parsedData.type === "join_room") {
-      //@ts-ignore
       const user = users.find((x) => x.ws === ws);
 
       user?.rooms.push(parsedData.roomId);
     }
 
     if (parsedData.type === "leave_room") {
-      //@ts-ignore
       const user = users.find((x) => x.ws === ws);
 
       if (!user) {
         return;
       }
 
-      user.rooms = user?.rooms.filter((x) => x === parsedData.room);
+      user.rooms = user?.rooms.filter((x) => x !== parsedData.room);
     }
 
     if (parsedData.type === "chat") {
@@ -98,6 +95,7 @@ wss.on("connection", function connection(ws, request) {
               type: "chat",
               message: message,
               roomId,
+              sendrId: userId,
             }),
           );
         }
