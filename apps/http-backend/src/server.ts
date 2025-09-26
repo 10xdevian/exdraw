@@ -1,3 +1,5 @@
+console.log("Hello http");
+
 import express from "express";
 import jwt from "jsonwebtoken";
 import { authMiddleware } from "./middleware";
@@ -5,7 +7,6 @@ import { JWT_SECRET } from "@repo/shared";
 import prisma from "@repo/db/client";
 import bcrypt from "bcryptjs";
 const app = express();
-
 app.use(express.json());
 
 app.post("/signup", async (req, res) => {
@@ -83,7 +84,7 @@ app.post("/signin", async (req, res) => {
   });
 });
 
-app.post("/create-room", authMiddleware, async (req, res) => {
+app.post("/room", authMiddleware, async (req, res) => {
   const { name } = req.body;
 
   //@ts-ignore
@@ -100,7 +101,40 @@ app.post("/create-room", authMiddleware, async (req, res) => {
   });
 });
 
+app.get("/chats/:roomId", async (req, res) => {
+  const roomId = Number(req.params.roomId);
+
+  const message = await prisma.chat.findMany({
+    where: {
+      roomId: roomId,
+    },
+    take: 40,
+    orderBy: {
+      id: "asc",
+    },
+  });
+
+  res.status(200).json({
+    message,
+  });
+});
+
+//
+
+app.get("/room/:slug", async (req, res) => {
+  const slug = req.params.slug;
+
+  const room = await prisma.room.findFirst({
+    where: {
+      slug,
+    },
+  });
+
+  res.status(200).json({
+    room,
+  });
+});
+
 app.listen(3001, () => {
   console.log(`server is running on port http://localhost:3001 `);
 });
-console.log("Hello http y");

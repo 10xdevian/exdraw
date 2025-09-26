@@ -5,16 +5,16 @@ console.log("welcome to websocket");
 // 3.
 //
 
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import jwt, { JwtPayload } from "jsonwebtoken";
-import { JWT_SECRET } from "@repo/shared";
+import {JWT_SECRET} from "@repo/shared"
 import prisma from "@repo/db/client";
 
 const wss = new WebSocketServer({ port: 8080 });
 interface User {
   id: string;
   rooms: string[];
-  ws: WebSocket | any;
+  ws: WebSocket;
 }
 const users: User[] = [];
 function checkUser(token: string): string | null {
