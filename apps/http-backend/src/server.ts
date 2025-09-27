@@ -6,8 +6,10 @@ import { authMiddleware } from "./middleware";
 import { JWT_SECRET } from "@repo/shared";
 import prisma from "@repo/db/client";
 import bcrypt from "bcryptjs";
+import cors from "cors";
 const app = express();
 app.use(express.json());
+app.use(cors());
 
 app.post("/signup", async (req, res) => {
   const { username, email, password } = req.body;
@@ -135,6 +137,6 @@ app.get("/room/:slug", async (req, res) => {
   });
 });
 
-app.listen(3001, () => {
-  console.log(`server is running on port http://localhost:3001 `);
+app.listen(3004, () => {
+  console.log(`server is running on port http://localhost:3004 `);
 });

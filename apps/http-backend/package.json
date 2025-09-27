@@ -9,17 +9,19 @@
     "dev": "tsc-watch --onSuccess \"npm start\""
   },
   "devDependencies": {
-    "@repo/shared": "workspace:*",
     "@repo/eslint-config": "workspace:*",
+    "@repo/shared": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "@types/express": "^5.0.3",
     "tsc-watch": "^7.1.1",
     "typescript": "^5.9.2"
   },
   "dependencies": {
-    "@repo/db":"workspace:*",
+    "@repo/db": "workspace:*",
+    "@types/cors": "^2.8.19",
     "@types/jsonwebtoken": "^9.0.10",
     "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
