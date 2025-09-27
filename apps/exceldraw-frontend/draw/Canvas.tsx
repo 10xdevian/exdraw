@@ -1,24 +1,25 @@
-"use client";
-import { DrawCanva } from "@/draw";
 import { useEffect, useRef } from "react";
-
-export default function Draw() {
+import { DrawCanva } from ".";
+export default function Canvas({
+  roomId,
+  socket,
+}: {
+  roomId: string;
+  socket: WebSocket;
+}) {
   const canvaRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     if (canvaRef.current) {
       const canvas = canvaRef.current;
 
-      DrawCanva(canvas);
+      DrawCanva(canvas, roomId, socket);
     }
   }, [canvaRef]);
+
   return (
     <div>
-      <div>
-        <h1>Hello canvas </h1>
-        <canvas ref={canvaRef} width={1500} height={1500}></canvas>;
-      </div>
-      ;
+      <canvas ref={canvaRef} width={1500} height={1500}></canvas>;
     </div>
   );
 }
