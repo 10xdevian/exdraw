@@ -7,7 +7,7 @@ console.log("welcome to websocket");
 
 import { WebSocketServer, WebSocket } from "ws";
 import jwt, { JwtPayload } from "jsonwebtoken";
-import {JWT_SECRET} from "@repo/shared"
+import { JWT_SECRET } from "@repo/shared";
 import prisma from "@repo/db/client";
 
 const wss = new WebSocketServer({ port: 8080 });
@@ -83,7 +83,7 @@ wss.on("connection", function connection(ws, request) {
       await prisma.chat.create({
         data: {
           userId: userId as unknown as number,
-          roomId,
+          roomId: Number(roomId),
           message,
         },
       });

@@ -25,6 +25,8 @@ export async function DrawCanva(
 
   const existingShapes: Shape[] = await getExistingShapes(roomId);
 
+  console.log(existingShapes);
+
   if (!ctx) {
     return;
   }
@@ -34,7 +36,7 @@ export async function DrawCanva(
 
     if (message.type === "chat") {
       const parsedShapes = JSON.parse(message.message);
-      existingShapes.push(parsedShapes);
+      existingShapes.push(parsedShapes.shape);
       clearCanvas(existingShapes, canvas, ctx);
     }
   };
@@ -110,7 +112,7 @@ async function getExistingShapes(roomId: string) {
   const shapes = messages.map((x: { message: string }) => {
     const messageData = JSON.parse(x.message);
 
-    return messageData;
+    return messageData.shape;
   });
 
   return shapes;
