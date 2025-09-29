@@ -9,9 +9,5 @@ export default async function Draw({
 }) {
   const roomId = (await params).roomId;
   console.log(roomId);
-  return (
-    <div>
-      <CanvasRoom roomId={roomId} />;
-    </div>
-  );
+  return <CanvasRoom roomId={roomId} />;
 }

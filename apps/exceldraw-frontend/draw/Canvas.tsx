@@ -1,5 +1,12 @@
-import { useEffect, useRef } from "react";
+// TODO
+// 1. add a react hook that change the canva hight and width when you resize the window
+
+import { useEffect, useRef, useState } from "react";
 import { DrawCanva } from ".";
+import TabBar from "../components/TabBar";
+
+type Shape = "circle" | "rect" | "pencil";
+
 export default function Canvas({
   roomId,
   socket,
@@ -8,6 +15,7 @@ export default function Canvas({
   socket: WebSocket;
 }) {
   const canvaRef = useRef<HTMLCanvasElement>(null);
+  const [selectTool, setSelectTool] = useState<Shape>("rect");
 
   useEffect(() => {
     if (canvaRef.current) {
@@ -18,8 +26,11 @@ export default function Canvas({
   }, [canvaRef]);
 
   return (
-    <div>
-      <canvas ref={canvaRef} width={1500} height={1500}></canvas>;
+    <div className="h-[100vh] overflow-hidden ">
+      <TabBar selectTool={selectTool} setSelectTool={setSelectTool} />
+      <canvas ref={canvaRef} width={2000} height={2000}></canvas>
     </div>
   );
 }
+
+//

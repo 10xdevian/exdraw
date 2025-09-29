@@ -25,9 +25,5 @@ export function CanvasRoom({ roomId }: { roomId: string }) {
   if (!socket) {
     return <div>Connectiing..... websocket</div>;
   }
-  return (
-    <div>
-      <Canvas roomId={roomId} socket={socket} />
-    </div>
-  );
+  return <Canvas roomId={roomId} socket={socket} />;
 }
