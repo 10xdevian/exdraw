@@ -7,27 +7,32 @@ export default function TabBar({
   selectTool,
 }: {
   selectTool: Shape;
-  setSelectTool: () => void;
+  setSelectTool: any;
 }) {
   return (
     <div className=" w-full flex fixed justify-center items-center  ">
       <div className="flex flex-row gap-1.5 w-auto px-6 justify-center  bg-gray-500  rounded-full py-1.5">
         <IconButton
-          activated="rect"
+          activated={selectTool === "rect"}
           icon={<RectangleHorizontal />}
-          onClick={() => {}}
+          onClick={() => {
+            setSelectTool("rect");
+          }}
         />
         <IconButton
-          activated="circle"
+          activated={selectTool === "circle"}
           icon={<Circle />}
           onClick={() => {
             setSelectTool("circle");
           }}
         />
-        <IconButton activated="pencil" icon={<Pencil />} onClick={() => {}} />
-        <IconButton activated="pencil" icon={<Pencil />} onClick={() => {}} />
-          <IconButton activated="pencil" icon={<Pencil />} onClick={() => {}} />
-
+        <IconButton
+          activated={selectTool === "pencil"}
+          icon={<Pencil />}
+          onClick={() => {
+            setSelectTool("pencil");
+          }}
+        />
       </div>
     </div>
   );
