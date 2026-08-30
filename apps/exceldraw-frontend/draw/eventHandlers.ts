@@ -403,6 +403,9 @@ export function createEventHandlers(
         if (finishedShape) {
           sendEvent("SHAPE_UPDATE", finishedShape);
           await saveShapeToDB(roomId, finishedShape);
+          if (store.activeTool !== "pencil" && store.activeTool !== "eraser") {
+            store.setActiveTool("select");
+          }
         }
       }
     }
