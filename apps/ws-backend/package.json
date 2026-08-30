@@ -9,8 +9,8 @@
     "dev": "tsc-watch --onSuccess \"npm start\""
   },
   "devDependencies": {
-    "@repo/shared": "workspace:*",
     "@repo/eslint-config": "workspace:*",
+    "@repo/shared": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "@types/ws": "^8.18.1",
     "tsc-watch": "^7.1.1",
@@ -19,6 +19,7 @@
   "dependencies": {
     "@repo/db": "workspace:*",
     "@types/jsonwebtoken": "^9.0.10",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.2",
     "ws": "^8.18.3"
   }
