@@ -6,4 +6,30 @@ export const BACKEND_URL = "http://localhost:3004";
 
 export const WEBSOCKET_URL = "ws://localhost:8080";
 
-export const TOKEN ="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjMsImlhdCI6MTc1ODk2ODIxNX0.fYw6w6cd3ZACFOUh9cRxOtwVpp6vHgjIu08I8mIvkEY"
+export const TOKEN =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjMsImlhdCI6MTc1ODk2ODIxNX0.fYw6w6cd3ZACFOUh9cRxOtwVpp6vHgjIu08I8mIvkEY";
+
+export type ShapeType = "rect" | "circle" | "pencil" | "text" | "diamond" | "arrow" | "image" | "eraser" | "select";
+
+export interface Shape {
+  id: string;
+  type: ShapeType;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  strokeColor?: string;
+  backgroundColor?: string;
+}
+
+export type EventAction = "SHAPE_ADD" | "SHAPE_UPDATE" | "SHAPE_DELETE";
+
+export interface CanvasEvent {
+  eventId: string;
+  clientId: string;
+  roomId: string;
+  timestamp: number;
+  action: EventAction;
+  payload: Shape;
+  sequenceNumber?: number; // added by server
+}

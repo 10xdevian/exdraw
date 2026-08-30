@@ -8,7 +8,7 @@ export default function IconButton({
 }: {
   icon: ReactNode;
   onClick: () => void;
-  activated?:any;
+  activated?: boolean;
 }) {
   return (
     <Button

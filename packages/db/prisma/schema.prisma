@@ -8,30 +8,41 @@ datasource db {
 }
 
 model User {
-  id       Int    @id @default(autoincrement())
-  username String @unique
+  id       Int      @id @default(autoincrement())
+  username String   @unique
   password String
   email    String
   chats    Chat[]
-  rooms    Room[]
+  rooms    Room[]   @relation("RoomAdmin")
+  editorOf Room[]   @relation("RoomEditors")
 }
 
 model Room {
   id        Int      @id @default(autoincrement())
   slug      String   @unique
+  viewSlug  String?  @unique
+  collabSlug String? @unique
   createdAt DateTime @default(now())
-  adminId   Int
-  admin     User     @relation(fields: [adminId], references: [id])
+  adminId   Int?
+  admin     User?    @relation("RoomAdmin", fields: [adminId], references: [id])
+  editors   User[]   @relation("RoomEditors")
   chat      Chat[]
+  viewers   Viewer[]
 }
 
 model Chat {
   id      Int    @id @default(autoincrement())
   roomId  Int
   message String
-  userId  Int
+  userId  Int?
 
   room Room @relation(fields: [roomId], references: [id])
+  user User? @relation(fields: [userId], references: [id])
+}
 
-  user User @relation(fields: [userId], references: [id])
+model Viewer {
+  id      Int    @id @default(autoincrement())
+  roomId  Int
+  name    String
+  room    Room   @relation(fields: [roomId], references: [id])
 }

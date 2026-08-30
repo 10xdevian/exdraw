@@ -29,4 +29,4 @@ prisma
     console.error("❌ Failed to connect to the database:", err);
   });
 
-export default prisma
+export default prisma;
