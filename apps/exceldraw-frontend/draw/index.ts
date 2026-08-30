@@ -3,6 +3,7 @@ import { BACKEND_URL } from "@repo/shared";
 import { useCanvasStore } from "../store/canvasStore";
 import { Shape, CanvasEvent } from "@repo/shared";
 import { getShapesFromDB, saveShapeToDB, saveShapesToDB, getLastSequenceNumber, setLastSequenceNumber } from "../lib/db";
+import { getCenter, getBoundingBox, hitTest, hitTestHandle, drawShape, drawSelectionBox, HandleType } from "./ShapeManager";
 
 function generateId() {
   return Math.random().toString(36).substring(2, 15);
@@ -19,47 +20,6 @@ function throttle(func: Function, limit: number) {
   }
 }
 
-function hitTest(x: number, y: number, shape: Shape): boolean {
-  if (shape.type === "rect") {
-    // Normalization for negative width/height
-    const minX = Math.min(shape.x, shape.x + shape.width);
-    const maxX = Math.max(shape.x, shape.x + shape.width);
-    const minY = Math.min(shape.y, shape.y + shape.height);
-    const maxY = Math.max(shape.y, shape.y + shape.height);
-    return x >= minX && x <= maxX && y >= minY && y <= maxY;
-  }
-  if (shape.type === "circle") {
-    const rx = Math.abs(shape.width / 2);
-    const ry = Math.abs(shape.height / 2);
-    const cx = shape.x + shape.width / 2;
-    const cy = shape.y + shape.height / 2;
-    if (rx === 0 || ry === 0) return false;
-    return Math.pow(x - cx, 2) / Math.pow(rx, 2) + Math.pow(y - cy, 2) / Math.pow(ry, 2) <= 1;
-  }
-  if (shape.type === "line" || shape.type === "connector") {
-    const ex = shape.endX ?? shape.x;
-    const ey = shape.endY ?? shape.y;
-    const l2 = Math.pow(ex - shape.x, 2) + Math.pow(ey - shape.y, 2);
-    if (l2 === 0) return Math.hypot(x - shape.x, y - shape.y) < 5;
-    let t = ((x - shape.x) * (ex - shape.x) + (y - shape.y) * (ey - shape.y)) / l2;
-    t = Math.max(0, Math.min(1, t));
-    const projX = shape.x + t * (ex - shape.x);
-    const projY = shape.y + t * (ey - shape.y);
-    return Math.hypot(x - projX, y - projY) < 5;
-  }
-  return false;
-}
-
-function getCenter(shape: Shape) {
-  if (shape.type === "rect" || shape.type === "circle") {
-    return { x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 };
-  }
-  if (shape.type === "line" || shape.type === "connector") {
-    return { x: (shape.x + (shape.endX ?? shape.x)) / 2, y: (shape.y + (shape.endY ?? shape.y)) / 2 };
-  }
-  return { x: shape.x, y: shape.y };
-}
-
 export async function DrawCanva(
   canvas: HTMLCanvasElement,
   roomId: string,
@@ -68,7 +28,6 @@ export async function DrawCanva(
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
-  // 1. INSTANT LOCAL LOAD
   try {
     const localShapes = await getShapesFromDB(roomId);
     if (localShapes.length > 0) {
@@ -82,7 +41,6 @@ export async function DrawCanva(
     console.warn("Could not load shapes", e);
   }
 
-  // 2. RECONNECT + SYNC (Missed-event replay)
   const syncWithServer = async () => {
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     const lastSeq = await getLastSequenceNumber(roomId);
@@ -96,7 +54,6 @@ export async function DrawCanva(
 
   let selectedIds = new Set<string>();
 
-  // Draw loop (Zustand subscription)
   const unsubscribe = useCanvasStore.subscribe((state, prevState) => {
     if (state.shapes !== prevState.shapes || state.activeTool !== prevState.activeTool) {
       clearCanvas(state.shapes, selectedIds, canvas, ctx);
@@ -106,10 +63,13 @@ export async function DrawCanva(
   clearCanvas(useCanvasStore.getState().shapes, selectedIds, canvas, ctx);
 
   let isDrawingOrDragging = false;
+  let activeHandle: HandleType = null;
   let startX = 0;
   let startY = 0;
   let currentShapeId: string | null = null;
   let dragOffset = { x: 0, y: 0 };
+  let originalShapeData: Shape | null = null;
+  
   const clientId = generateId();
 
   const sendEvent = (action: CanvasEvent["action"], payload: any) => {
@@ -129,24 +89,26 @@ export async function DrawCanva(
     sendEvent("SHAPE_UPDATE", shape);
   }, 50);
 
-  // Auto-update connectors when a connected shape moves
-  const updateConnectorsForShape = (movedShapeId: string, deltaX: number, deltaY: number) => {
+  const updateConnectorsForShape = (movedShapeId: string) => {
     const state = useCanvasStore.getState();
     const connectorsToUpdate: Shape[] = [];
-    
+    const movedShape = state.shapes.find(s => s.id === movedShapeId);
+    if (!movedShape) return;
+    const center = getCenter(movedShape);
+
     state.shapes.forEach(shape => {
       if (shape.type === "connector") {
         let updated = false;
         let newConnector = { ...shape };
         
         if (shape.sourceId === movedShapeId) {
-           newConnector.x += deltaX;
-           newConnector.y += deltaY;
+           newConnector.x = center.x;
+           newConnector.y = center.y;
            updated = true;
         }
         if (shape.targetId === movedShapeId) {
-           newConnector.endX = (newConnector.endX ?? newConnector.x) + deltaX;
-           newConnector.endY = (newConnector.endY ?? newConnector.y) + deltaY;
+           newConnector.endX = center.x;
+           newConnector.endY = center.y;
            updated = true;
         }
         
@@ -157,9 +119,7 @@ export async function DrawCanva(
       }
     });
     
-    // Broadcast connector updates
     connectorsToUpdate.forEach(conn => throttledUpdateBroadcast(conn));
-    return connectorsToUpdate;
   };
 
   const handleMouseDown = (event: MouseEvent) => {
@@ -168,8 +128,24 @@ export async function DrawCanva(
     startY = event.clientY;
 
     if (state.activeTool === "select") {
-      // Find top-most hit shape
       const sortedShapes = [...state.shapes].sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
+      
+      // 1. Check if we hit a resize handle of currently selected shapes
+      for (const id of selectedIds) {
+         const shape = state.shapes.find(s => s.id === id);
+         if (shape) {
+           const handle = hitTestHandle(startX, startY, shape);
+           if (handle) {
+             isDrawingOrDragging = true;
+             activeHandle = handle;
+             currentShapeId = shape.id;
+             originalShapeData = { ...shape };
+             return; // Stop here, we are resizing
+           }
+         }
+      }
+
+      // 2. Check if we hit a shape body
       let hitShape: Shape | null = null;
       for (let i = sortedShapes.length - 1; i >= 0; i--) {
         const s = sortedShapes[i];
@@ -185,6 +161,7 @@ export async function DrawCanva(
           selectedIds.add(hitShape.id);
         }
         isDrawingOrDragging = true;
+        activeHandle = "body";
         currentShapeId = hitShape.id;
         dragOffset = { x: startX, y: startY };
       } else {
@@ -205,7 +182,7 @@ export async function DrawCanva(
       width: 0,
       height: 0,
     };
-    if (state.activeTool === "line") {
+    if (state.activeTool === "line" || state.activeTool === "arrow") {
       newShape.endX = startX;
       newShape.endY = startY;
     }
@@ -221,29 +198,75 @@ export async function DrawCanva(
     const currentShape = state.shapes.find(s => s.id === currentShapeId);
     if (!currentShape) return;
 
-    if (state.activeTool === "select" && selectedIds.has(currentShape.id)) {
-      const deltaX = event.clientX - dragOffset.x;
-      const deltaY = event.clientY - dragOffset.y;
-      dragOffset = { x: event.clientX, y: event.clientY };
+    if (state.activeTool === "select") {
+      if (activeHandle === "body") {
+        // Dragging
+        const deltaX = event.clientX - dragOffset.x;
+        const deltaY = event.clientY - dragOffset.y;
+        dragOffset = { x: event.clientX, y: event.clientY };
 
-      // Move all selected shapes
-      selectedIds.forEach(id => {
-        const shape = state.shapes.find(s => s.id === id);
-        if (shape) {
-          const updates: Partial<Shape> = { x: shape.x + deltaX, y: shape.y + deltaY };
-          if (shape.type === "line" || shape.type === "connector") {
-             updates.endX = (shape.endX ?? shape.x) + deltaX;
-             updates.endY = (shape.endY ?? shape.y) + deltaY;
+        selectedIds.forEach(id => {
+          const shape = state.shapes.find(s => s.id === id);
+          if (shape) {
+            const updates: Partial<Shape> = { x: shape.x + deltaX, y: shape.y + deltaY };
+            if (shape.type === "line" || shape.type === "connector" || shape.type === "arrow") {
+               updates.endX = (shape.endX ?? shape.x) + deltaX;
+               updates.endY = (shape.endY ?? shape.y) + deltaY;
+            }
+            state.updateShape(id, updates);
+            
+            const updatedShape = state.shapes.find(s => s.id === id);
+            if (updatedShape) {
+               throttledUpdateBroadcast(updatedShape);
+               updateConnectorsForShape(id);
+            }
           }
-          state.updateShape(id, updates);
-          
-          const updatedShape = state.shapes.find(s => s.id === id);
-          if (updatedShape) {
-             throttledUpdateBroadcast(updatedShape);
-             updateConnectorsForShape(id, deltaX, deltaY);
-          }
+        });
+      } else if (activeHandle && originalShapeData) {
+        // Resizing
+        const deltaX = event.clientX - startX;
+        const deltaY = event.clientY - startY;
+        
+        let updates: Partial<Shape> = {};
+        
+        if (originalShapeData.type === "line" || originalShapeData.type === "connector" || originalShapeData.type === "arrow") {
+           if (activeHandle === "start") {
+             updates = { x: originalShapeData.x + deltaX, y: originalShapeData.y + deltaY };
+           } else if (activeHandle === "end") {
+             updates = { endX: (originalShapeData.endX ?? originalShapeData.x) + deltaX, endY: (originalShapeData.endY ?? originalShapeData.y) + deltaY };
+           }
+        } else {
+           const { x, y, width, height } = originalShapeData;
+           let newX = x;
+           let newY = y;
+           let newW = width;
+           let newH = height;
+
+           if (activeHandle.includes("n")) {
+             newY = y + deltaY;
+             newH = height - deltaY;
+           }
+           if (activeHandle.includes("s")) {
+             newH = height + deltaY;
+           }
+           if (activeHandle.includes("w")) {
+             newX = x + deltaX;
+             newW = width - deltaX;
+           }
+           if (activeHandle.includes("e")) {
+             newW = width + deltaX;
+           }
+           
+           updates = { x: newX, y: newY, width: newW, height: newH };
         }
-      });
+        
+        state.updateShape(currentShapeId, updates);
+        const updatedShape = state.shapes.find(s => s.id === currentShapeId);
+        if (updatedShape) {
+          throttledUpdateBroadcast(updatedShape);
+          updateConnectorsForShape(currentShapeId);
+        }
+      }
       return;
     }
 
@@ -251,7 +274,7 @@ export async function DrawCanva(
     const width = event.clientX - startX;
     const height = event.clientY - startY;
 
-    if (currentShape.type === "line") {
+    if (currentShape.type === "line" || currentShape.type === "arrow") {
       state.updateShape(currentShapeId, { endX: event.clientX, endY: event.clientY });
     } else {
       state.updateShape(currentShapeId, { width, height });
@@ -269,13 +292,50 @@ export async function DrawCanva(
     
     if (finishedShape) {
       if (state.activeTool === "select") {
-        // Broadcast final positions for selected shapes
+        
+        // If we were dragging a line end, check for snaps
+        if (activeHandle === "start" || activeHandle === "end") {
+           const ptX = activeHandle === "start" ? finishedShape.x : (finishedShape.endX ?? finishedShape.x);
+           const ptY = activeHandle === "start" ? finishedShape.y : (finishedShape.endY ?? finishedShape.y);
+           
+           let hitTarget: Shape | null = null;
+           for (let i = state.shapes.length - 1; i >= 0; i--) {
+             const s = state.shapes[i];
+             if (s && s.id !== finishedShape.id && (s.type === "rect" || s.type === "circle" || s.type === "diamond")) {
+                if (hitTest(ptX, ptY, s)) { hitTarget = s; break; }
+             }
+           }
+           
+           if (hitTarget) {
+             const c = getCenter(hitTarget);
+             state.updateShape(finishedShape.id, {
+                type: "connector",
+                ...(activeHandle === "start" ? { sourceId: hitTarget.id, x: c.x, y: c.y } : { targetId: hitTarget.id, endX: c.x, endY: c.y })
+             });
+           } else {
+             // Detach if dragged away
+             const isStart = activeHandle === "start";
+             const stillHasOther = isStart ? !!finishedShape.targetId : !!finishedShape.sourceId;
+             state.updateShape(finishedShape.id, {
+                ...(isStart ? { sourceId: undefined } : { targetId: undefined }),
+                type: stillHasOther ? "connector" : "line"
+             });
+           }
+           finishedShape = state.shapes.find(s => s.id === currentShapeId) || finishedShape;
+        }
+
+        // Standardize dimensions if resized to negative
+        if (activeHandle && activeHandle !== "body" && activeHandle !== "start" && activeHandle !== "end") {
+           const { minX, minY, w, h } = getBoundingBox(finishedShape);
+           state.updateShape(finishedShape.id, { x: minX, y: minY, width: w, height: h });
+           finishedShape = state.shapes.find(s => s.id === currentShapeId) || finishedShape;
+        }
+
         for (const id of selectedIds) {
            const shape = state.shapes.find(s => s.id === id);
            if (shape) {
              sendEvent("SHAPE_UPDATE", shape);
              await saveShapeToDB(roomId, shape);
-             // Connectors saving logic
              if (shape.type !== "connector") {
                 state.shapes.forEach(async conn => {
                   if (conn.type === "connector" && (conn.sourceId === id || conn.targetId === id)) {
@@ -287,16 +347,13 @@ export async function DrawCanva(
            }
         }
       } else {
-        // If drawing a line, check if it connects two shapes
-        if (finishedShape.type === "line") {
+        if (finishedShape.type === "line" || finishedShape.type === "arrow") {
            let sourceShape: Shape | null = null;
            let targetShape: Shape | null = null;
-           // Find shapes under start and end points
            const sortedShapes = [...state.shapes].sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
            for (let i = sortedShapes.length - 1; i >= 0; i--) {
              const s = sortedShapes[i];
-             if (!s) continue;
-             if (s.id !== finishedShape.id && (s.type === "rect" || s.type === "circle")) {
+             if (s && s.id !== finishedShape.id && (s.type === "rect" || s.type === "circle" || s.type === "diamond")) {
                 if (!sourceShape && hitTest(startX, startY, s)) sourceShape = s;
                 if (!targetShape && hitTest(event.clientX, event.clientY, s)) targetShape = s;
              }
@@ -313,8 +370,24 @@ export async function DrawCanva(
                endX: tc.x,
                endY: tc.y
              });
-             finishedShape = state.shapes.find(s => s.id === currentShapeId);
+             finishedShape = state.shapes.find(s => s.id === currentShapeId) || finishedShape;
+           } else if (sourceShape || targetShape) {
+              const connectedShape = sourceShape || targetShape;
+              const c = getCenter(connectedShape!);
+              const isSource = !!sourceShape;
+              state.updateShape(finishedShape.id, {
+                 type: "connector",
+                 ...(isSource ? { sourceId: connectedShape!.id, x: c.x, y: c.y } : { targetId: connectedShape!.id, endX: c.x, endY: c.y })
+              });
+              finishedShape = state.shapes.find(s => s.id === currentShapeId) || finishedShape;
            }
+        }
+
+        // Standardize newly drawn shapes
+        if (finishedShape.type !== "line" && finishedShape.type !== "connector" && finishedShape.type !== "arrow") {
+           const { minX, minY, w, h } = getBoundingBox(finishedShape);
+           state.updateShape(finishedShape.id, { x: minX, y: minY, width: w, height: h });
+           finishedShape = state.shapes.find(s => s.id === currentShapeId) || finishedShape;
         }
 
         if (finishedShape) {
@@ -323,31 +396,31 @@ export async function DrawCanva(
         }
       }
     }
+    
+    activeHandle = null;
     currentShapeId = null;
+    originalShapeData = null;
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    // Delete/Backspace
     if ((e.key === "Backspace" || e.key === "Delete") && selectedIds.size > 0) {
        const state = useCanvasStore.getState();
-       
        if (selectedIds.size === 1) {
          const id = Array.from(selectedIds)[0];
          sendEvent("SHAPE_DELETE", { id });
          const newShapes = state.shapes.filter(s => s.id !== id);
          state.setShapes(newShapes);
-         saveShapesToDB(roomId, newShapes); // Sync IDB
+         saveShapesToDB(roomId, newShapes);
        } else {
          const ids = Array.from(selectedIds);
          sendEvent("SHAPES_DELETE", { ids });
          const newShapes = state.shapes.filter(s => !selectedIds.has(s.id));
          state.setShapes(newShapes);
-         saveShapesToDB(roomId, newShapes); // Sync IDB
+         saveShapesToDB(roomId, newShapes);
        }
        selectedIds.clear();
        clearCanvas(useCanvasStore.getState().shapes, selectedIds, canvas, ctx);
     }
-    // Select All (Cmd+A / Ctrl+A)
     if ((e.metaKey || e.ctrlKey) && e.key === "a") {
        e.preventDefault();
        const state = useCanvasStore.getState();
@@ -361,8 +434,6 @@ export async function DrawCanva(
       const msg = JSON.parse(event.data);
       if (msg.type === "chat") {
         const canvasEvent: CanvasEvent = JSON.parse(msg.message);
-        
-        // Block reflected events
         if (canvasEvent.clientId === clientId) {
            if (msg.sequenceNumber) await setLastSequenceNumber(roomId, msg.sequenceNumber);
            return;
@@ -381,7 +452,6 @@ export async function DrawCanva(
            const existingShape = state.shapes.find(s => s.id === incomingShape.id);
            
            if (existingShape && existingShape.sequenceNumber && msg.sequenceNumber && existingShape.sequenceNumber > msg.sequenceNumber) {
-              console.log(`[Replay] Dropping out-of-order stale update for ${incomingShape.id}`);
               return;
            }
 
@@ -436,54 +506,9 @@ function clearCanvas(
   const sortedShapes = [...shapes].sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
 
   sortedShapes.forEach((shape) => {
-    ctx.beginPath();
-    ctx.strokeStyle = shape.strokeColor || "white";
-    
-    if (shape.type === "rect") {
-      ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
-    } else if (shape.type === "circle") {
-      const radiusX = Math.abs(shape.width / 2);
-      const radiusY = Math.abs(shape.height / 2);
-      const centerX = shape.x + shape.width / 2;
-      const centerY = shape.y + shape.height / 2;
-      ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
-      ctx.stroke();
-    } else if (shape.type === "line" || shape.type === "connector") {
-      ctx.moveTo(shape.x, shape.y);
-      ctx.lineTo(shape.endX ?? shape.x, shape.endY ?? shape.y);
-      ctx.stroke();
-    }
-    
-    // Draw Selection Highlight
+    drawShape(ctx, shape);
     if (selectedIds.has(shape.id)) {
-       ctx.save();
-       ctx.strokeStyle = "#a855f7"; // Purple selection
-       ctx.lineWidth = 2;
-       ctx.setLineDash([5, 5]);
-       
-       const padding = 6;
-       if (shape.type === "rect") {
-         const minX = Math.min(shape.x, shape.x + shape.width);
-         const minY = Math.min(shape.y, shape.y + shape.height);
-         const w = Math.abs(shape.width);
-         const h = Math.abs(shape.height);
-         ctx.strokeRect(minX - padding, minY - padding, w + padding * 2, h + padding * 2);
-       } else if (shape.type === "circle") {
-         const radiusX = Math.abs(shape.width / 2);
-         const radiusY = Math.abs(shape.height / 2);
-         const centerX = shape.x + shape.width / 2;
-         const centerY = shape.y + shape.height / 2;
-         ctx.beginPath();
-         ctx.ellipse(centerX, centerY, radiusX + padding, radiusY + padding, 0, 0, 2 * Math.PI);
-         ctx.stroke();
-       } else if (shape.type === "line" || shape.type === "connector") {
-         const minX = Math.min(shape.x, shape.endX ?? shape.x);
-         const minY = Math.min(shape.y, shape.endY ?? shape.y);
-         const w = Math.abs((shape.endX ?? shape.x) - shape.x);
-         const h = Math.abs((shape.endY ?? shape.y) - shape.y);
-         ctx.strokeRect(minX - padding, minY - padding, w + padding * 2, h + padding * 2);
-       }
-       ctx.restore();
+      drawSelectionBox(ctx, shape);
     }
   });
 }
