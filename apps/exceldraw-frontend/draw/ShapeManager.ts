@@ -1,3 +1,4 @@
+import { useCanvasStore } from "../store/canvasStore";
 import { Shape } from "@repo/shared";
 
 export type HandleType = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "start" | "end" | "body" | null;
@@ -33,10 +34,25 @@ export function hitTestHandle(x: number, y: number, shape: Shape): HandleType {
   const hs = HANDLE_SIZE;
   
   if (isLine) {
-    const ex = shape.endX ?? shape.x;
-    const ey = shape.endY ?? shape.y;
-    if (Math.abs(x - shape.x) <= hs && Math.abs(y - shape.y) <= hs) return "start";
-    if (Math.abs(x - ex) <= hs && Math.abs(y - ey) <= hs) return "end";
+    let startPt = { x: shape.x, y: shape.y };
+    let endPt = { x: shape.endX ?? shape.x, y: shape.endY ?? shape.y };
+    const allShapes = useCanvasStore.getState().shapes;
+
+    if (shape.sourceId) {
+      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
+      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
+    }
+    if (shape.targetId) {
+      const targetShape = allShapes.find(s => s.id === shape.targetId);
+      if (targetShape) endPt = getEdgeIntersection(targetShape, shape.x, shape.y);
+    }
+    if (shape.sourceId) {
+      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
+      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
+    }
+
+    if (Math.abs(x - startPt.x) <= hs && Math.abs(y - startPt.y) <= hs) return "start";
+    if (Math.abs(x - endPt.x) <= hs && Math.abs(y - endPt.y) <= hs) return "end";
     return null;
   }
 
@@ -190,13 +206,29 @@ export function drawSelectionBox(ctx: CanvasRenderingContext2D, shape: Shape) {
   if (shape.type === "line" || shape.type === "connector" || shape.type === "arrow") {
     // Draw endpoints handles
     ctx.fillStyle = "white";
-    const ex = shape.endX ?? shape.x;
-    const ey = shape.endY ?? shape.y;
-    ctx.fillRect(shape.x - hs, shape.y - hs, HANDLE_SIZE, HANDLE_SIZE);
-    ctx.strokeRect(shape.x - hs, shape.y - hs, HANDLE_SIZE, HANDLE_SIZE);
     
-    ctx.fillRect(ex - hs, ey - hs, HANDLE_SIZE, HANDLE_SIZE);
-    ctx.strokeRect(ex - hs, ey - hs, HANDLE_SIZE, HANDLE_SIZE);
+    let startPt = { x: shape.x, y: shape.y };
+    let endPt = { x: shape.endX ?? shape.x, y: shape.endY ?? shape.y };
+    const allShapes = useCanvasStore.getState().shapes;
+
+    if (shape.sourceId) {
+      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
+      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
+    }
+    if (shape.targetId) {
+      const targetShape = allShapes.find(s => s.id === shape.targetId);
+      if (targetShape) endPt = getEdgeIntersection(targetShape, shape.x, shape.y);
+    }
+    if (shape.sourceId) {
+      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
+      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
+    }
+
+    ctx.fillRect(startPt.x - hs, startPt.y - hs, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.strokeRect(startPt.x - hs, startPt.y - hs, HANDLE_SIZE, HANDLE_SIZE);
+    
+    ctx.fillRect(endPt.x - hs, endPt.y - hs, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.strokeRect(endPt.x - hs, endPt.y - hs, HANDLE_SIZE, HANDLE_SIZE);
   } else {
     // Draw dashed bounding box
     ctx.setLineDash([5, 5]);
