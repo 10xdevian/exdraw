@@ -5,9 +5,10 @@ import { AuthModal } from "../components/AuthModal";
 import { ViewerPromptModal } from "../components/ViewerPromptModal";
 import { DrawingsModal } from "../components/DrawingsModal";
 import axios from "axios";
-import { BACKEND_URL, WEBSOCKET_URL } from "@repo/shared";
+import { WEBSOCKET_URL, BACKEND_URL } from "@repo/shared";
 import { useSearchParams } from "next/navigation";
 import { useUIStore } from "../store/uiStore";
+import { useCanvasStore } from "../store/canvasStore";
 
 export function CanvasRoom({ roomId }: { roomId: string }) {
   const [socket, setSocket] = useState<WebSocket | null>(null);
@@ -144,8 +145,7 @@ export function CanvasRoom({ roomId }: { roomId: string }) {
       }
       
       // Get shapes and sync
-      // @ts-ignore
-      const shapes = window.getExistingShapes ? window.getExistingShapes() : [];
+      const shapes = useCanvasStore.getState().shapes;
       try {
         await axios.post(`${BACKEND_URL}/room/${currentRoomId}/sync`, { shapes }, {
           headers: token ? { Authorization: token } : undefined

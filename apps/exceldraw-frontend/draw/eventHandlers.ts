@@ -3,7 +3,7 @@ import { useCanvasStore } from "../store/canvasStore";
 import { InteractionState } from "./InteractionState";
 import { getCenter, getBoundingBox, hitTest, hitTestHandle } from "./ShapeManager";
 import { generateId, throttle, clearCanvas } from "./utils";
-import { saveShapeToDB, saveShapesToDB } from "../lib/db";
+import { saveShapeToDB, saveShapesToDB, deleteShapeFromDB, deleteShapesFromDB } from "../lib/db";
 
 export function createEventHandlers(
   canvas: HTMLCanvasElement,
@@ -50,6 +50,9 @@ export function createEventHandlers(
   };
 
   const spawnTextInput = (x: number, y: number, existingShape?: Shape) => {
+    if ((state as any).isEditingText) return;
+    (state as any).isEditingText = true;
+
     const store = useCanvasStore.getState();
     const input = document.createElement("textarea");
     input.style.position = "fixed";
@@ -67,7 +70,9 @@ export function createEventHandlers(
     document.body.appendChild(input);
     input.focus();
 
-    input.onblur = async () => {
+    const finishEditing = async () => {
+      if (!(state as any).isEditingText) return;
+      (state as any).isEditingText = false;
       const val = input.value.trim();
       document.body.removeChild(input);
       store.setActiveTool("select");
@@ -91,6 +96,15 @@ export function createEventHandlers(
       } else if (existingShape) {
         sendEvent("SHAPE_DELETE", { id: existingShape.id });
         store.setShapes(store.shapes.filter(s => s.id !== existingShape.id));
+        await deleteShapeFromDB(roomId, existingShape.id);
+      }
+    };
+
+    input.onblur = finishEditing;
+    input.onkeydown = (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        input.blur();
       }
     };
   };
@@ -403,16 +417,17 @@ export function createEventHandlers(
        const store = useCanvasStore.getState();
        if (state.selectedIds.size === 1) {
          const id = Array.from(state.selectedIds)[0];
+         if (!id) return;
          sendEvent("SHAPE_DELETE", { id });
          const newShapes = store.shapes.filter(s => s.id !== id);
          store.setShapes(newShapes);
-         saveShapesToDB(roomId, newShapes);
+         deleteShapeFromDB(roomId, id);
        } else {
          const ids = Array.from(state.selectedIds);
          sendEvent("SHAPES_DELETE", { ids });
          const newShapes = store.shapes.filter(s => !state.selectedIds.has(s.id));
          store.setShapes(newShapes);
-         saveShapesToDB(roomId, newShapes);
+         deleteShapesFromDB(roomId, ids);
        }
        state.selectedIds.clear();
        clearCanvas(useCanvasStore.getState().shapes, state.selectedIds, canvas, ctx);

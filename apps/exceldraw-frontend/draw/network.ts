@@ -1,6 +1,6 @@
 import { CanvasEvent, Shape } from "@repo/shared";
 import { useCanvasStore } from "../store/canvasStore";
-import { getLastSequenceNumber, setLastSequenceNumber, saveShapeToDB } from "../lib/db";
+import { getLastSequenceNumber, setLastSequenceNumber, saveShapeToDB, deleteShapeFromDB, deleteShapesFromDB } from "../lib/db";
 import { generateId } from "./utils";
 
 export function setupNetwork(socket: WebSocket | null, roomId: string, clientId: string) {
@@ -39,9 +39,12 @@ export function setupNetwork(socket: WebSocket | null, roomId: string, clientId:
         if (canvasEvent.action === "SHAPE_DELETE") {
            const id = canvasEvent.payload.id;
            state.setShapes(state.shapes.filter(s => s.id !== id));
+           await deleteShapeFromDB(roomId, id);
         } else if (canvasEvent.action === "SHAPES_DELETE") {
-           const ids = new Set((canvasEvent.payload as any).ids as string[]);
-           state.setShapes(state.shapes.filter(s => !ids.has(s.id)));
+           const ids = (canvasEvent.payload as any).ids as string[];
+           const idsSet = new Set(ids);
+           state.setShapes(state.shapes.filter(s => !idsSet.has(s.id)));
+           await deleteShapesFromDB(roomId, ids);
         } else {
            const incomingShape = { ...canvasEvent.payload, sequenceNumber: msg.sequenceNumber };
            const existingShape = state.shapes.find(s => s.id === incomingShape.id);

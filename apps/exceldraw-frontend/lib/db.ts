@@ -40,9 +40,28 @@ export async function saveShapeToDB(roomId: string, shape: Shape) {
   await db.put('shapes', { ...shape, roomId });
 }
 
+export async function deleteShapeFromDB(roomId: string, shapeId: string) {
+  const db = await getDB();
+  await db.delete('shapes', shapeId);
+}
+
+export async function deleteShapesFromDB(roomId: string, shapeIds: string[]) {
+  const db = await getDB();
+  const tx = db.transaction('shapes', 'readwrite');
+  for (const id of shapeIds) {
+    tx.store.delete(id);
+  }
+  await tx.done;
+}
+
 export async function saveShapesToDB(roomId: string, shapes: Shape[]) {
   const db = await getDB();
   const tx = db.transaction('shapes', 'readwrite');
+  const index = tx.store.index('by-room');
+  const keys = await index.getAllKeys(roomId);
+  for (const key of keys) {
+    tx.store.delete(key);
+  }
   for (const shape of shapes) {
     tx.store.put({ ...shape, roomId });
   }
