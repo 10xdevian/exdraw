@@ -5,7 +5,7 @@ import {
   Pencil, Type, Image as ImageIcon, Users, Cloud,
   ChevronDown, Book, Minus, Plus, Maximize,
   Undo2, Redo2, HelpCircle, CheckCircle2,
-  MoreHorizontal
+  MoreHorizontal, User, LogOut
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { ShareModal } from "../components/ShareModal";
@@ -40,6 +40,18 @@ export default function Canvas({
   const [dimensions, setDimensions] = useState({ width: 2000, height: 2000 });
   const [shareModalMode, setShareModalMode] = useState<"share" | "collaborate" | null>(null);
   const setDrawingsOpen = useUIStore(s => s.setDrawingsOpen);
+  const setAuthOpen = useUIStore(s => s.setAuthOpen);
+
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [username, setUsername] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setToken(localStorage.getItem("token"));
+      setUsername(localStorage.getItem("username"));
+    }
+  }, []);
 
   const { data: roomInfo } = useQuery({
     queryKey: ['roomInfo', roomId],
@@ -170,8 +182,42 @@ export default function Canvas({
             Export
           </Button>
 
-          <div className="p-2 hover:bg-white/5 rounded-lg cursor-pointer">
-            <Book className="w-5 h-5 text-gray-300" />
+          <div className="relative">
+            <div 
+              className="p-2 hover:bg-white/5 rounded-lg cursor-pointer flex items-center gap-2"
+              onClick={() => {
+                if (token) setProfileOpen(!profileOpen);
+                else setAuthOpen(true, "signin");
+              }}
+            >
+              {token ? (
+                <div className="w-5 h-5 rounded-full bg-[#582bd4] text-white flex items-center justify-center text-xs font-bold">
+                  {(username || "U").charAt(0).toUpperCase()}
+                </div>
+              ) : (
+                <User className="w-5 h-5 text-gray-300" />
+              )}
+            </div>
+            
+            {profileOpen && token && (
+              <div className="absolute right-0 top-full mt-2 w-48 bg-[#121212] border border-white/10 rounded-xl shadow-2xl py-2 z-50">
+                <div className="px-4 py-2 border-b border-white/10 mb-1">
+                  <div className="text-sm font-medium text-white">{username || "User"}</div>
+                  <div className="text-xs text-gray-400">Account Details</div>
+                </div>
+                <button 
+                  onClick={() => {
+                    localStorage.removeItem("token");
+                    localStorage.removeItem("username");
+                    window.location.reload();
+                  }}
+                  className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-white/5 flex items-center gap-2"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Logout
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

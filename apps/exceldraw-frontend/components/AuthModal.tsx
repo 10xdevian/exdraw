@@ -52,6 +52,7 @@ export function AuthModal() {
 
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [serverError, setServerError] = useState("");
 
   const { register, handleSubmit, formState: { errors }, reset } = useForm<AuthFormValues>({
     resolver: zodResolver(authSchema),
@@ -65,6 +66,7 @@ export function AuthModal() {
 
   const signinMutation = useMutation({
     mutationFn: async (data: AuthFormValues) => {
+      setServerError("");
       const res = await axios.post(`${BACKEND_URL}/signin`, {
         username: data.email,
         password: data.password
@@ -73,17 +75,19 @@ export function AuthModal() {
     },
     onSuccess: (data) => {
       localStorage.setItem("token", data.token);
+      if (data.username) localStorage.setItem("username", data.username);
       setAuthOpen(false);
       reset();
       window.location.reload();
     },
     onError: (error: import("axios").AxiosError<{ msg: string }>) => {
-      alert(error.response?.data?.msg || "Something went wrong during sign in");
+      setServerError(error.response?.data?.msg || "Something went wrong during sign in");
     }
   });
 
   const signupMutation = useMutation({
     mutationFn: async (data: AuthFormValues) => {
+      setServerError("");
       const res = await axios.post(`${BACKEND_URL}/signup`, {
         email: data.email,
         username: data.username || data.email,
@@ -95,7 +99,7 @@ export function AuthModal() {
       setAuthOpen(true, "signin");
     },
     onError: (error: import("axios").AxiosError<{ msg: string }>) => {
-      alert(error.response?.data?.msg || "Something went wrong during sign up");
+      setServerError(error.response?.data?.msg || "Something went wrong during sign up");
     }
   });
 
@@ -170,7 +174,7 @@ export function AuthModal() {
             {authMode === "signup" && (
               <p className="text-sm text-gray-400">
                 Already have an account?{" "}
-                <button type="button" onClick={() => { setAuthOpen(true, "signin"); reset(); }} className="text-[#9b66ff] hover:text-purple-400 transition-colors">
+                <button type="button" onClick={() => { setAuthOpen(true, "signin"); reset(); setServerError(""); }} className="text-[#9b66ff] hover:text-purple-400 transition-colors">
                   Sign in
                 </button>
               </p>
@@ -259,6 +263,12 @@ export function AuthModal() {
               </div>
             )}
 
+            {serverError && (
+              <div className="p-3 mt-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-sm font-medium">
+                {serverError}
+              </div>
+            )}
+
             <Button type="submit" className="w-full mt-2 font-medium bg-[#7950f2] hover:bg-[#6741d9] text-white" disabled={isPending}>
               {isPending ? "Loading..." : authMode === "signin" ? "Sign in" : "Create account"} 
               {!isPending && <ArrowRight className="w-4 h-4 ml-2" />}
@@ -282,7 +292,7 @@ export function AuthModal() {
           {authMode === "signin" ? (
             <div className="text-center text-sm text-gray-400 mt-8">
               Don&apos;t have an account?{" "}
-              <button onClick={() => { setAuthOpen(true, "signup"); reset(); }} type="button" className="text-[#9b66ff] hover:text-purple-400 transition-colors">
+              <button onClick={() => { setAuthOpen(true, "signup"); reset(); setServerError(""); }} type="button" className="text-[#9b66ff] hover:text-purple-400 transition-colors">
                 Sign up
               </button>
             </div>
