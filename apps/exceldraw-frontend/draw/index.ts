@@ -54,8 +54,18 @@ export async function DrawCanva(
 
   let selectedIds = new Set<string>();
 
-  const unsubscribe = useCanvasStore.subscribe((state, prevState) => {
-    if (state.shapes !== prevState.shapes || state.activeTool !== prevState.activeTool) {
+  const unsubscribe = useCanvasStore.subscribe(async (state, prevState) => {
+    if (state.strokeColor !== prevState.strokeColor && selectedIds.size > 0) {
+      selectedIds.forEach(async id => {
+         state.updateShape(id, { strokeColor: state.strokeColor });
+         const s = state.shapes.find(s => s.id === id);
+         if (s) {
+           sendEvent("SHAPE_UPDATE", s);
+           await saveShapeToDB(roomId, s);
+         }
+      });
+    }
+    if (state.shapes !== prevState.shapes || state.activeTool !== prevState.activeTool || state.strokeColor !== prevState.strokeColor) {
       clearCanvas(state.shapes, selectedIds, canvas, ctx);
     }
   });
@@ -122,10 +132,81 @@ export async function DrawCanva(
     connectorsToUpdate.forEach(conn => throttledUpdateBroadcast(conn));
   };
 
+  const handleDoubleClick = (event: MouseEvent) => {
+    const state = useCanvasStore.getState();
+    if (state.activeTool !== "select") return;
+
+    const sortedShapes = [...state.shapes].sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
+    let hitShape: Shape | null = null;
+    for (let i = sortedShapes.length - 1; i >= 0; i--) {
+      const s = sortedShapes[i];
+      if (s && hitTest(event.clientX, event.clientY, s) && s.type === "text") {
+        hitShape = s;
+        break;
+      }
+    }
+
+    if (hitShape) {
+       spawnTextInput(event.clientX, event.clientY, hitShape);
+    }
+  };
+
+  const spawnTextInput = (x: number, y: number, existingShape?: Shape) => {
+    const state = useCanvasStore.getState();
+    const input = document.createElement("textarea");
+    input.style.position = "fixed";
+    input.style.left = `${x}px`;
+    input.style.top = `${y}px`;
+    input.style.background = "transparent";
+    input.style.color = existingShape?.strokeColor || state.strokeColor || "white";
+    input.style.border = "1px solid #a855f7";
+    input.style.outline = "none";
+    input.style.font = "24px sans-serif";
+    input.style.minWidth = "100px";
+    input.style.minHeight = "40px";
+    input.style.zIndex = "9999";
+    input.value = existingShape?.text || "";
+    document.body.appendChild(input);
+    input.focus();
+
+    input.onblur = async () => {
+      const val = input.value.trim();
+      document.body.removeChild(input);
+      state.setActiveTool("select");
+      if (val) {
+        if (existingShape) {
+          state.updateShape(existingShape.id, { text: val, width: val.length * 14 });
+          const updated = state.shapes.find(s => s.id === existingShape.id);
+          if (updated) {
+            sendEvent("SHAPE_UPDATE", updated);
+            await saveShapeToDB(roomId, updated);
+          }
+        } else {
+          const id = generateId();
+          const newShape: Shape = {
+            id, type: "text", x, y, width: val.length * 14, height: 28, text: val, strokeColor: state.strokeColor || "white"
+          };
+          state.addShape(newShape);
+          sendEvent("SHAPE_ADD", newShape);
+          await saveShapeToDB(roomId, newShape);
+        }
+      } else if (existingShape) {
+        // Remove text if cleared
+        sendEvent("SHAPE_DELETE", { id: existingShape.id });
+        state.setShapes(state.shapes.filter(s => s.id !== existingShape.id));
+      }
+    };
+  };
+
   const handleMouseDown = (event: MouseEvent) => {
     const state = useCanvasStore.getState();
     startX = event.clientX;
     startY = event.clientY;
+
+    if (state.activeTool === "text") {
+       spawnTextInput(startX, startY);
+       return;
+    }
 
     if (state.activeTool === "select") {
       const sortedShapes = [...state.shapes].sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
@@ -230,10 +311,19 @@ export async function DrawCanva(
         let updates: Partial<Shape> = {};
         
         if (originalShapeData.type === "line" || originalShapeData.type === "connector" || originalShapeData.type === "arrow") {
+           let snapCenter: {x: number, y: number} | null = null;
+           for (const s of state.shapes) {
+              if (s.id !== currentShapeId && (s.type === "rect" || s.type === "circle" || s.type === "diamond")) {
+                 if (hitTest(event.clientX, event.clientY, s)) {
+                    snapCenter = getCenter(s);
+                    break;
+                 }
+              }
+           }
            if (activeHandle === "start") {
-             updates = { x: originalShapeData.x + deltaX, y: originalShapeData.y + deltaY };
+             updates = { x: snapCenter ? snapCenter.x : originalShapeData.x + deltaX, y: snapCenter ? snapCenter.y : originalShapeData.y + deltaY };
            } else if (activeHandle === "end") {
-             updates = { endX: (originalShapeData.endX ?? originalShapeData.x) + deltaX, endY: (originalShapeData.endY ?? originalShapeData.y) + deltaY };
+             updates = { endX: snapCenter ? snapCenter.x : (originalShapeData.endX ?? originalShapeData.x) + deltaX, endY: snapCenter ? snapCenter.y : (originalShapeData.endY ?? originalShapeData.y) + deltaY };
            }
         } else {
            const { x, y, width, height } = originalShapeData;
@@ -275,7 +365,19 @@ export async function DrawCanva(
     const height = event.clientY - startY;
 
     if (currentShape.type === "line" || currentShape.type === "arrow") {
-      state.updateShape(currentShapeId, { endX: event.clientX, endY: event.clientY });
+      let snapCenter: {x: number, y: number} | null = null;
+      for (const s of state.shapes) {
+         if (s.id !== currentShapeId && (s.type === "rect" || s.type === "circle" || s.type === "diamond")) {
+            if (hitTest(event.clientX, event.clientY, s)) {
+               snapCenter = getCenter(s);
+               break;
+            }
+         }
+      }
+      state.updateShape(currentShapeId, { 
+         endX: snapCenter ? snapCenter.x : event.clientX, 
+         endY: snapCenter ? snapCenter.y : event.clientY 
+      });
     } else {
       state.updateShape(currentShapeId, { width, height });
     }
@@ -479,6 +581,7 @@ export async function DrawCanva(
   canvas.addEventListener("mousemove", handleMouseMove);
   canvas.addEventListener("mouseup", handleMouseUp);
   canvas.addEventListener("mouseleave", handleMouseUp);
+  canvas.addEventListener("dblclick", handleDoubleClick);
   window.addEventListener("keydown", handleKeyDown);
 
   return () => {
@@ -487,6 +590,7 @@ export async function DrawCanva(
     canvas.removeEventListener("mousemove", handleMouseMove);
     canvas.removeEventListener("mouseup", handleMouseUp);
     canvas.removeEventListener("mouseleave", handleMouseUp);
+    canvas.removeEventListener("dblclick", handleDoubleClick);
     window.removeEventListener("keydown", handleKeyDown);
     if (socket) {
       socket.removeEventListener("message", handleSocketMessage);

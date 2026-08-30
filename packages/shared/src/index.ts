@@ -22,6 +22,7 @@ export interface Shape {
   endY?: number;      // For lines
   sourceId?: string;  // For connectors
   targetId?: string;  // For connectors
+  text?: string;      // For text shapes
   strokeColor?: string;
   backgroundColor?: string;
   sequenceNumber?: number;

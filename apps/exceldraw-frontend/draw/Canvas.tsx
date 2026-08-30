@@ -236,14 +236,21 @@ export default function Canvas({
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 pointer-events-auto">
           {/* Colors */}
           <div className="flex items-center gap-2 p-2 bg-[#09090b] border border-white/10 rounded-xl shadow-xl">
-            <div className="w-6 h-6 rounded-full border border-purple-500 bg-transparent flex items-center justify-center cursor-pointer">
-              <div className="w-4 h-4 rounded-full bg-purple-600"></div>
-            </div>
-            <div className="w-4 h-4 rounded-full bg-green-500 cursor-pointer hover:scale-110 transition-transform"></div>
-            <div className="w-4 h-4 rounded-full bg-blue-500 cursor-pointer hover:scale-110 transition-transform"></div>
-            <div className="w-4 h-4 rounded-full bg-orange-500 cursor-pointer hover:scale-110 transition-transform"></div>
-            <div className="w-4 h-4 rounded-full bg-red-500 cursor-pointer hover:scale-110 transition-transform"></div>
-            <div className="w-4 h-4 rounded-full bg-white cursor-pointer hover:scale-110 transition-transform"></div>
+            {[
+               { id: "#a855f7", css: "bg-purple-600", border: "border-purple-500" },
+               { id: "#22c55e", css: "bg-green-500", border: "border-green-400" },
+               { id: "#3b82f6", css: "bg-blue-500", border: "border-blue-400" },
+               { id: "#f97316", css: "bg-orange-500", border: "border-orange-400" },
+               { id: "#ef4444", css: "bg-red-500", border: "border-red-400" },
+               { id: "#ffffff", css: "bg-white", border: "border-gray-300" }
+            ].map(c => {
+               const isActive = useCanvasStore(s => s.strokeColor) === c.id;
+               return (
+                 <div key={c.id} onClick={() => useCanvasStore.getState().setStrokeColor(c.id)} className={`w-6 h-6 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-110 ${isActive ? `border ${c.border}` : ''}`}>
+                   <div className={`w-4 h-4 rounded-full ${c.css}`}></div>
+                 </div>
+               );
+            })}
             <div className="w-px h-5 bg-white/10 mx-1"></div>
             <div className="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-white cursor-pointer">
                <Plus className="w-4 h-4" />

@@ -103,7 +103,12 @@ export function drawShape(ctx: CanvasRenderingContext2D, shape: Shape) {
 
   const { minX, minY, w, h } = getBoundingBox(shape);
 
-  if (shape.type === "rect") {
+  if (shape.type === "text") {
+    ctx.font = "24px sans-serif";
+    ctx.fillStyle = shape.strokeColor || "white";
+    ctx.textBaseline = "top";
+    ctx.fillText(shape.text || "", shape.x, shape.y);
+  } else if (shape.type === "rect") {
     ctx.strokeRect(minX, minY, w, h);
   } else if (shape.type === "circle") {
     ctx.ellipse(minX + w / 2, minY + h / 2, w / 2, h / 2, 0, 0, 2 * Math.PI);
