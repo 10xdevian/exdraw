@@ -1,0 +1,23 @@
+{
+  "name": "worker",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "build": "tsc -p .",
+    "dev": "tsc-watch --onSuccess \"node dist/index.js\""
+  },
+  "dependencies": {
+    "@repo/db": "workspace:*",
+    "@repo/shared": "workspace:*",
+    "ioredis": "^5.3.2",
+    "kafkajs": "^2.2.4"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "workspace:^",
+    "@types/node": "^20.0.0",
+    "tsc-watch": "^7.1.1",
+    "typescript": "^5.9.2"
+  }
+}

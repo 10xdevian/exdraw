@@ -28,6 +28,7 @@ model Room {
   editors   User[]   @relation("RoomEditors")
   chat      Chat[]
   viewers   Viewer[]
+  snapshot  Snapshot?
 }
 
 model Chat {
@@ -45,4 +46,15 @@ model Viewer {
   roomId  Int
   name    String
   room    Room   @relation(fields: [roomId], references: [id])
+}
+
+model Snapshot {
+  id              Int      @id @default(autoincrement())
+  roomId          Int      @unique
+  latestSequence  Int      // The sequenceNumber of the last chat message included in this snapshot
+  s3Key           String   // The object storage key for the serialized room state
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  room            Room     @relation(fields: [roomId], references: [id])
 }

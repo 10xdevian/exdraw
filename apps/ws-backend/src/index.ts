@@ -1,16 +1,25 @@
-console.log("welcome to websocket (Phase 2)");
+console.log("welcome to websocket (Phase 3)");
 
 import { WebSocketServer, WebSocket } from "ws";
 import jwt from "jsonwebtoken";
 import { JWT_SECRET } from "@repo/shared";
 import prisma from "@repo/db/client";
 import Redis from "ioredis";
+import { Kafka } from "kafkajs";
 
 // REDIS CONFIGURATION
 const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 const redis = new Redis(REDIS_URL);
 const pub = new Redis(REDIS_URL);
 const sub = new Redis(REDIS_URL);
+
+// KAFKA CONFIGURATION
+const kafka = new Kafka({
+  clientId: "ws-backend",
+  brokers: (process.env.KAFKA_BROKERS || "localhost:9092").split(","),
+});
+const producer = kafka.producer();
+producer.connect().catch(e => console.error("Kafka connect error", e));
 
 const wss = new WebSocketServer({ port: 8080 });
 
@@ -171,7 +180,7 @@ wss.on("connection", function connection(ws, request) {
         const missedChats = await prisma.chat.findMany({
           where: {
             roomId: room.id,
-            id: { gt: lastSequenceNumber }
+            id: { gt: lastSequenceNumber } // In Phase 3 we treat ID as sequence
           },
           orderBy: { id: 'asc' }
         });
@@ -226,25 +235,33 @@ wss.on("connection", function connection(ws, request) {
           return;
         }
 
-        const chat = await prisma.chat.create({
-          data: {
-            userId: Number(userId),
-            roomId: room.id,
-            message,
-          },
-        });
+        // Generate strict sequence number via Redis for the room
+        const sequenceNumber = await redis.incr(`room_seq:${room.id}`);
 
-        // ROOM METRICS
-        redis.hincrby("metrics:rooms", roomId, 1);
-
-        // DISTRIBUTED PUB/SUB BROADCAST
+        // DISTRIBUTED PUB/SUB BROADCAST (Fast path)
         pub.publish("canvas_events", JSON.stringify({
           message,
           roomId,
           viewSlug: room.viewSlug,
           senderId: userId,
-          sequenceNumber: chat.id
+          sequenceNumber: sequenceNumber
         }));
+
+        // KAFKA DURABLE EVENT PIPELINE (Async path)
+        await producer.send({
+          topic: "canvas_events",
+          messages: [
+            {
+              key: roomId, // partition by room to maintain order
+              value: JSON.stringify({
+                userId: Number(userId),
+                roomId: room.id,
+                message,
+                sequenceNumber
+              })
+            }
+          ]
+        });
       }
     }
   });

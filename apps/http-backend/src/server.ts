@@ -111,18 +111,41 @@ app.post("/room", authMiddleware, async (req, res) => {
   });
 });
 
+import Redis from "ioredis";
+const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
+const redis = new Redis(REDIS_URL);
+
 app.get("/chats/:slug", async (req, res) => {
   const slug = req.params.slug;
   const room = await prisma.room.findFirst({ 
     where: { 
       OR: [{ slug }, { viewSlug: slug }, { collabSlug: slug }] 
-    } 
+    },
+    include: { snapshot: true }
   });
   if (!room) return res.status(404).json({ error: "Room not found" });
+
+  let baseSequence = 0;
+  let snapshotMessages: any[] = [];
+  
+  if (room.snapshot) {
+    baseSequence = room.snapshot.latestSequence;
+    const snapshotData = await redis.get(room.snapshot.s3Key);
+    if (snapshotData) {
+      const shapes = JSON.parse(snapshotData);
+      // Map shapes back to fake chat messages so the frontend's legacy shape loader still works seamlessly
+      snapshotMessages = shapes.map((shape: any) => ({
+        id: baseSequence,
+        roomId: room.id,
+        message: JSON.stringify({ payload: shape }), // Modern CanvasEvent format wrapper
+      }));
+    }
+  }
 
   const message = await prisma.chat.findMany({
     where: {
       roomId: room.id,
+      id: { gt: baseSequence }
     },
     orderBy: {
       id: "asc",
@@ -130,7 +153,7 @@ app.get("/chats/:slug", async (req, res) => {
   });
 
   res.status(200).json({
-    message,
+    message: [...snapshotMessages, ...message],
   });
 });
 

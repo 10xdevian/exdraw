@@ -21,6 +21,26 @@ services:
     ports:
       - "6379:6379"
 
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
   ws-backend:
     build:
       context: .
@@ -28,13 +48,30 @@ services:
     environment:
       - DATABASE_URL=postgresql://admin:secret@postgres:5432/exdraw
       - REDIS_URL=redis://redis:6379
+      - KAFKA_BROKERS=kafka:29092
     ports:
       - "8080-8089:8080"
     depends_on:
       - postgres
       - redis
+      - kafka
     deploy:
       replicas: 2
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://admin:secret@postgres:5432/exdraw
+      - REDIS_URL=redis://redis:6379
+      - KAFKA_BROKERS=kafka:29092
+    depends_on:
+      - postgres
+      - redis
+      - kafka
+    deploy:
+      replicas: 1
 
 volumes:
   pgdata:
