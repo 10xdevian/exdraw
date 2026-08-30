@@ -28,7 +28,7 @@ export function clearCanvas(
   const sortedShapes = [...shapes].sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
 
   sortedShapes.forEach((shape) => {
-    drawShape(ctx, shape);
+    drawShape(ctx, shape, shapes);
     if (selectedIds.has(shape.id)) {
       drawSelectionBox(ctx, shape);
     }
@@ -40,15 +40,31 @@ export async function getExistingShapes(roomId: string) {
   const response = await axios.get(`${BACKEND_URL}/chats/${roomId}`);
   const messages = response.data.message;
 
-  const shapes = messages.map((x: { id: number, message: string }) => {
+  const shapesMap = new Map<string, Shape>();
+
+  // Ensure chronological order before reducing
+  messages.sort((a: any, b: any) => a.id - b.id);
+
+  messages.forEach((x: { id: number, message: string }) => {
     try {
        const messageData = JSON.parse(x.message);
+       const action = messageData.action;
        const payload = messageData.payload || messageData.shape || messageData;
-       return { ...payload, sequenceNumber: x.id };
+       
+       if (action === "SHAPE_DELETE") {
+         shapesMap.delete(payload.id);
+       } else if (action === "SHAPES_DELETE") {
+         if (payload.ids) {
+            payload.ids.forEach((id: string) => shapesMap.delete(id));
+         }
+       } else if (action === "SHAPE_ADD" || action === "SHAPE_UPDATE" || payload.id) {
+         const existing = shapesMap.get(payload.id);
+         shapesMap.set(payload.id, { ...existing, ...payload, sequenceNumber: x.id });
+       }
     } catch {
-       return null;
+       // ignore malformed
     }
-  }).filter(Boolean);
+  });
 
-  return (shapes as Shape[]).sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
+  return Array.from(shapesMap.values()).sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
 }

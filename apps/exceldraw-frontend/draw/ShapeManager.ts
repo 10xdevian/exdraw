@@ -96,7 +96,38 @@ export function hitTest(x: number, y: number, shape: Shape): boolean {
   return x >= minX && x <= maxX && y >= minY && y <= maxY;
 }
 
-export function drawShape(ctx: CanvasRenderingContext2D, shape: Shape) {
+export function getEdgeIntersection(shape: Shape, pointX: number, pointY: number): { x: number, y: number } {
+  const { minX, minY, w, h } = getBoundingBox(shape);
+  const cx = minX + w / 2;
+  const cy = minY + h / 2;
+  const dx = pointX - cx;
+  const dy = pointY - cy;
+
+  if (dx === 0 && dy === 0) return { x: cx, y: cy };
+
+  if (shape.type === "circle") {
+    const rx = w / 2;
+    const ry = h / 2;
+    const angle = Math.atan2(dy, dx);
+    const r = (rx * ry) / Math.sqrt(Math.pow(ry * Math.cos(angle), 2) + Math.pow(rx * Math.sin(angle), 2));
+    return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+  } else if (shape.type === "diamond") {
+    const hw = w / 2 || 1;
+    const hh = h / 2 || 1;
+    const t = 1 / (Math.abs(dx) / hw + Math.abs(dy) / hh);
+    return { x: cx + t * dx, y: cy + t * dy };
+  } else {
+    // Rect by default
+    const hw = w / 2;
+    const hh = h / 2;
+    const scaleX = dx !== 0 ? Math.abs(hw / dx) : Infinity;
+    const scaleY = dy !== 0 ? Math.abs(hh / dy) : Infinity;
+    const scale = Math.min(scaleX, scaleY);
+    return { x: cx + dx * scale, y: cy + dy * scale };
+  }
+}
+
+export function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, allShapes: Shape[] = []) {
   ctx.beginPath();
   ctx.strokeStyle = shape.strokeColor || "white";
   ctx.lineWidth = 2;
@@ -121,8 +152,25 @@ export function drawShape(ctx: CanvasRenderingContext2D, shape: Shape) {
     ctx.closePath();
     ctx.stroke();
   } else if (shape.type === "line" || shape.type === "connector" || shape.type === "arrow") {
-    ctx.moveTo(shape.x, shape.y);
-    ctx.lineTo(shape.endX ?? shape.x, shape.endY ?? shape.y);
+    let startPt = { x: shape.x, y: shape.y };
+    let endPt = { x: shape.endX ?? shape.x, y: shape.endY ?? shape.y };
+
+    if (shape.sourceId) {
+      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
+      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
+    }
+    if (shape.targetId) {
+      const targetShape = allShapes.find(s => s.id === shape.targetId);
+      if (targetShape) endPt = getEdgeIntersection(targetShape, shape.x, shape.y);
+    }
+    // Re-evaluate startPt against new endPt to be perfectly flush
+    if (shape.sourceId) {
+      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
+      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
+    }
+
+    ctx.moveTo(startPt.x, startPt.y);
+    ctx.lineTo(endPt.x, endPt.y);
     ctx.stroke();
   }
 }
