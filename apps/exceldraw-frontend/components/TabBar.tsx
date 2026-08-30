@@ -1,38 +1,37 @@
-import { Circle, Pencil, RectangleHorizontal } from "lucide-react";
+import { Circle, Minus, MousePointer2, RectangleHorizontal } from "lucide-react";
 import IconButton from "./IconButton";
-type Shape = "circle" | "rect" | "pencil";
-
+import { ShapeType } from "@repo/shared";
 import React from "react";
+
 export default function TabBar({
-  setSelectTool,
   selectTool,
+  setSelectTool,
 }: {
-  selectTool: Shape;
-  setSelectTool: (tool: Shape) => void;
+  selectTool: ShapeType;
+  setSelectTool: (tool: ShapeType) => void;
 }): React.ReactNode {
   return (
-    <div className=" w-full flex fixed justify-center items-center  ">
-      <div className="flex flex-row gap-1.5 w-auto px-6 justify-center  bg-gray-500  rounded-full py-1.5">
+    <div className="w-full flex fixed justify-center items-center mt-4">
+      <div className="flex flex-row gap-1.5 w-auto px-6 justify-center bg-gray-500 rounded-full py-1.5 shadow-lg">
+        <IconButton
+          activated={selectTool === "select"}
+          icon={<MousePointer2 size={20} />}
+          onClick={() => setSelectTool("select")}
+        />
         <IconButton
           activated={selectTool === "rect"}
-          icon={<RectangleHorizontal />}
-          onClick={() => {
-            setSelectTool("rect");
-          }}
+          icon={<RectangleHorizontal size={20} />}
+          onClick={() => setSelectTool("rect")}
         />
         <IconButton
           activated={selectTool === "circle"}
-          icon={<Circle />}
-          onClick={() => {
-            setSelectTool("circle");
-          }}
+          icon={<Circle size={20} />}
+          onClick={() => setSelectTool("circle")}
         />
         <IconButton
-          activated={selectTool === "pencil"}
-          icon={<Pencil />}
-          onClick={() => {
-            setSelectTool("pencil");
-          }}
+          activated={selectTool === "line"}
+          icon={<Minus size={20} />}
+          onClick={() => setSelectTool("line")}
         />
       </div>
     </div>

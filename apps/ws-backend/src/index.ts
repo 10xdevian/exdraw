@@ -13,7 +13,7 @@ const CanvasEventSchema = z.object({
   clientId: z.string(),
   roomId: z.string(),
   timestamp: z.number(),
-  action: z.enum(["SHAPE_ADD", "SHAPE_UPDATE", "SHAPE_DELETE"]),
+  action: z.enum(["SHAPE_ADD", "SHAPE_UPDATE", "SHAPE_DELETE", "SHAPES_DELETE"]),
   payload: z.any()
 });
 

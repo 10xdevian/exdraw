@@ -184,7 +184,7 @@ export default function Canvas({
           <ToolButton icon={<Square />} active={selectTool === "rect"} onClick={() => setSelectTool("rect")} />
           <ToolButton icon={<Circle />} active={selectTool === "circle"} onClick={() => setSelectTool("circle")} />
           <ToolButton icon={<Diamond />} active={selectTool === "diamond"} onClick={() => setSelectTool("diamond")} />
-          <ToolButton icon={<ArrowRight />} active={selectTool === "arrow"} onClick={() => setSelectTool("arrow")} />
+          <ToolButton icon={<ArrowRight />} active={selectTool === "line"} onClick={() => setSelectTool("line")} />
           <div className="w-px h-6 bg-white/10 mx-1"></div>
           <ToolButton icon={<Pencil />} active={selectTool === "pencil"} onClick={() => setSelectTool("pencil")} />
           <ToolButton icon={<Type />} active={selectTool === "text"} onClick={() => setSelectTool("text")} />
@@ -203,7 +203,7 @@ export default function Canvas({
           <ToolButton icon={<Square />} active={selectTool === "rect"} onClick={() => setSelectTool("rect")} />
           <ToolButton icon={<Circle />} active={selectTool === "circle"} onClick={() => setSelectTool("circle")} />
           <ToolButton icon={<Diamond />} active={selectTool === "diamond"} onClick={() => setSelectTool("diamond")} />
-          <ToolButton icon={<ArrowRight />} active={selectTool === "arrow"} onClick={() => setSelectTool("arrow")} />
+          <ToolButton icon={<ArrowRight />} active={selectTool === "line"} onClick={() => setSelectTool("line")} />
           <div className="w-10 h-px bg-white/10 my-1"></div>
           <ToolButton icon={<Pencil />} active={selectTool === "pencil"} onClick={() => setSelectTool("pencil")} />
           <ToolButton icon={<Type />} active={selectTool === "text"} onClick={() => setSelectTool("text")} />
