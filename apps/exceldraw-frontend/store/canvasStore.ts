@@ -18,7 +18,7 @@ interface CanvasState {
 
 export const useCanvasStore = create<CanvasState>((set) => ({
   shapes: [],
-  activeTool: "rect",
+  activeTool: "select",
   strokeColor: "#a855f7", // default purple
   strokeWidth: 2, // default medium
 
