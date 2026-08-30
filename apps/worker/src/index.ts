@@ -37,26 +37,35 @@ async function processEvent(payload: EachMessagePayload) {
     eventId = parsed.eventId;
   } catch (e) {}
 
-  // IDEMPOTENCY: Check if we've already written this event to DB
+  // Absolute Idempotency: PostgreSQL is the final boundary
   if (eventId) {
-    const isProcessed = await redis.set(`processed_event:${eventId}`, "1", "EX", 3600, "NX");
-    if (!isProcessed) {
-      console.log(`Skipping duplicate event ${eventId}`);
+    try {
+      await prisma.chat.upsert({
+        where: { eventId },
+        update: {}, // DO NOTHING
+        create: {
+          eventId,
+          sequenceNumber,
+          userId,
+          roomId,
+          message: chatMessage,
+        }
+      });
+    } catch (e) {
+      console.log(`Skipping duplicate or failed event ${eventId}`);
       return;
     }
+  } else {
+    // Fallback for events without ID (legacy or malformed)
+    await prisma.chat.create({
+      data: {
+        sequenceNumber,
+        userId,
+        roomId,
+        message: chatMessage,
+      },
+    });
   }
-
-  // Write to Postgres
-  // Note: we use `id` auto-increment, but sequenceNumber is logged here.
-  // In a perfect system, we'd alter `Chat` to explicitly store `sequenceNumber`.
-  // For now, we assume `id` aligns roughly or we rely on Redis sequence.
-  await prisma.chat.create({
-    data: {
-      userId,
-      roomId,
-      message: chatMessage,
-    },
-  });
 
   // ASYNC ANALYTICS PIPELINE
   // Offloaded from WS path to worker
@@ -68,10 +77,16 @@ async function processEvent(payload: EachMessagePayload) {
   if (totalEvents && parseInt(totalEvents) % 100 === 0) {
     console.log(`[Snapshot] Triggering snapshot for room ${roomId}`);
     
-    // Fetch all events for this room
+    // Strict Snapshot Consistency: fetch exactly up to this sequenceNumber
+    const cutOffSequence = sequenceNumber;
+    
+    // Fetch all events for this room up to the cutoff barrier
     const allChats = await prisma.chat.findMany({
-      where: { roomId },
-      orderBy: { id: "asc" }
+      where: { 
+        roomId,
+        sequenceNumber: { lte: cutOffSequence }
+      },
+      orderBy: { sequenceNumber: "asc" }
     });
 
     const shapesMap = new Map();

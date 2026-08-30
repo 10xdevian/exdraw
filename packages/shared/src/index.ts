@@ -20,6 +20,7 @@ export interface Shape {
   height: number;
   strokeColor?: string;
   backgroundColor?: string;
+  sequenceNumber?: number;
 }
 
 export type EventAction = "SHAPE_ADD" | "SHAPE_UPDATE" | "SHAPE_DELETE";

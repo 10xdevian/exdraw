@@ -6,6 +6,16 @@ import { JWT_SECRET } from "@repo/shared";
 import prisma from "@repo/db/client";
 import Redis from "ioredis";
 import { Kafka } from "kafkajs";
+import { z } from "zod";
+
+const CanvasEventSchema = z.object({
+  eventId: z.string(),
+  clientId: z.string(),
+  roomId: z.string(),
+  timestamp: z.number(),
+  action: z.enum(["SHAPE_ADD", "SHAPE_UPDATE", "SHAPE_DELETE"]),
+  payload: z.any()
+});
 
 // REDIS CONFIGURATION
 const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
@@ -197,12 +207,23 @@ wss.on("connection", function connection(ws, request) {
       }
     }
 
+
     if (parsedData.type === "chat") {
       const message = parsedData.message;
       const roomId = parsedData.roomId;
 
       if (!userId) {
         ws.send(JSON.stringify({ type: "error", message: "Sign in to share or collaborate" }));
+        return;
+      }
+
+      // STRICT SCHEMA VALIDATION
+      let payload;
+      try {
+        payload = JSON.parse(message);
+        CanvasEventSchema.parse(payload);
+      } catch(e) {
+        ws.send(JSON.stringify({ type: "error", message: "Malformed or invalid payload." }));
         return;
       }
 

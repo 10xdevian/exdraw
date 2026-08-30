@@ -151,12 +151,17 @@ export async function DrawCanva(
       const msg = JSON.parse(event.data);
       if (msg.type === "chat") {
         const canvasEvent: CanvasEvent = JSON.parse(msg.message);
-        const incomingShape = canvasEvent.payload;
+        const incomingShape = { ...canvasEvent.payload, sequenceNumber: msg.sequenceNumber };
         
         // Ignore our own events reflected back unless we need sequence validation
         if (canvasEvent.clientId === clientId) {
            if (msg.sequenceNumber) {
               await setLastSequenceNumber(roomId, msg.sequenceNumber);
+              const state = useCanvasStore.getState();
+              const existingShape = state.shapes.find(s => s.id === incomingShape.id);
+              if (existingShape && (!existingShape.sequenceNumber || existingShape.sequenceNumber < msg.sequenceNumber)) {
+                state.updateShape(incomingShape.id, { sequenceNumber: msg.sequenceNumber });
+              }
            }
            return;
         }
@@ -164,6 +169,12 @@ export async function DrawCanva(
         const state = useCanvasStore.getState();
         const existingShape = state.shapes.find(s => s.id === incomingShape.id);
         
+        // DETERMINISTIC CONFLICT RESOLUTION (Last-Write-Wins by Server Sequence)
+        if (existingShape && existingShape.sequenceNumber && msg.sequenceNumber && existingShape.sequenceNumber > msg.sequenceNumber) {
+           console.log(`[Replay] Dropping out-of-order stale update for ${incomingShape.id}`);
+           return;
+        }
+
         if (canvasEvent.action === "SHAPE_ADD" && !existingShape) {
           state.addShape(incomingShape);
           await saveShapeToDB(roomId, incomingShape);
@@ -214,7 +225,10 @@ function clearCanvas(
 ) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  shapes.forEach((shape) => {
+  // DETERMINISTIC RENDER ORDER: Sort by sequenceNumber to prevent z-index flickering
+  const sortedShapes = [...shapes].sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
+
+  sortedShapes.forEach((shape) => {
     ctx.beginPath();
     ctx.strokeStyle = shape.strokeColor || "white";
     
@@ -236,15 +250,17 @@ async function getExistingShapes(roomId: string) {
   const response = await axios.get(`${BACKEND_URL}/chats/${roomId}`);
   const messages = response.data.message;
 
-  const shapes = messages.map((x: { message: string }) => {
+  const shapes = messages.map((x: { id: number, message: string }) => {
     try {
        const messageData = JSON.parse(x.message);
        // handle old { shape: ... } format vs new CanvasEvent format
-       return messageData.payload || messageData.shape || messageData;
+       const payload = messageData.payload || messageData.shape || messageData;
+       return { ...payload, sequenceNumber: x.id }; // Attach server sequence
     } catch {
        return null;
     }
   }).filter(Boolean);
 
-  return shapes as Shape[];
+  // Sort initially to maintain deterministic state
+  return (shapes as Shape[]).sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
 }
