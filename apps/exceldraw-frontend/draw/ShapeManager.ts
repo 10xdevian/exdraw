@@ -130,7 +130,7 @@ export function getEdgeIntersection(shape: Shape, pointX: number, pointY: number
 export function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, allShapes: Shape[] = []) {
   ctx.beginPath();
   ctx.strokeStyle = shape.strokeColor || "white";
-  ctx.lineWidth = 2;
+  ctx.lineWidth = shape.strokeWidth || 2;
 
   const { minX, minY, w, h } = getBoundingBox(shape);
 

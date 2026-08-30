@@ -5,6 +5,7 @@ interface CanvasState {
   shapes: Shape[];
   activeTool: ShapeType;
   strokeColor: string;
+  strokeWidth: number;
   
   // Actions
   addShape: (shape: Shape) => void;
@@ -12,12 +13,14 @@ interface CanvasState {
   setShapes: (shapes: Shape[]) => void;
   setActiveTool: (tool: ShapeType) => void;
   setStrokeColor: (color: string) => void;
+  setStrokeWidth: (width: number) => void;
 }
 
 export const useCanvasStore = create<CanvasState>((set) => ({
   shapes: [],
   activeTool: "rect",
   strokeColor: "#a855f7", // default purple
+  strokeWidth: 2, // default medium
 
   addShape: (shape) => 
     set((state) => ({ shapes: [...state.shapes, shape] })),
@@ -33,4 +36,5 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   
   setActiveTool: (tool) => set({ activeTool: tool }),
   setStrokeColor: (color) => set({ strokeColor: color }),
+  setStrokeWidth: (width) => set({ strokeWidth: width }),
 }));

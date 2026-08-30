@@ -259,15 +259,22 @@ export default function Canvas({
 
           {/* Stroke Width */}
           <div className="flex items-center gap-1.5 p-2 bg-[#09090b] border border-white/10 rounded-xl shadow-xl">
-            <div className="w-8 h-8 rounded hover:bg-white/5 flex items-center justify-center cursor-pointer">
-              <div className="w-4 h-[1px] bg-white"></div>
-            </div>
-            <div className="w-8 h-8 rounded bg-[#1a1a24] text-purple-400 flex items-center justify-center cursor-pointer">
-              <div className="w-4 h-[2px] bg-purple-500"></div>
-            </div>
-            <div className="w-8 h-8 rounded hover:bg-white/5 flex items-center justify-center cursor-pointer">
-              <div className="w-4 h-[4px] bg-white"></div>
-            </div>
+            {[
+              { width: 1, css: "h-[1px]" },
+              { width: 2, css: "h-[2px]" },
+              { width: 4, css: "h-[4px]" }
+            ].map(s => {
+              const isActive = useCanvasStore(state => state.strokeWidth) === s.width;
+              return (
+                <div 
+                  key={s.width}
+                  onClick={() => useCanvasStore.getState().setStrokeWidth(s.width)}
+                  className={`w-8 h-8 rounded flex items-center justify-center cursor-pointer transition-colors ${isActive ? 'bg-[#1a1a24] text-purple-400' : 'hover:bg-white/5 text-white'}`}
+                >
+                  <div className={`w-4 ${s.css} ${isActive ? 'bg-purple-500' : 'bg-white'}`}></div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

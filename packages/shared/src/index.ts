@@ -24,6 +24,7 @@ export interface Shape {
   targetId?: string;  // For connectors
   text?: string;      // For text shapes
   strokeColor?: string;
+  strokeWidth?: number;
   backgroundColor?: string;
   sequenceNumber?: number;
 }

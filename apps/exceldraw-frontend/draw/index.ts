@@ -31,17 +31,26 @@ export async function DrawCanva(
   const { sendEvent, cleanupNetwork } = setupNetwork(socket, roomId, state.clientId);
 
   const unsubscribe = useCanvasStore.subscribe(async (storeState, prevState) => {
-    if (storeState.strokeColor !== prevState.strokeColor && state.selectedIds.size > 0) {
-      state.selectedIds.forEach(async id => {
-         storeState.updateShape(id, { strokeColor: storeState.strokeColor });
-         const s = storeState.shapes.find(s => s.id === id);
-         if (s) {
-           sendEvent("SHAPE_UPDATE", s);
-           await saveShapeToDB(roomId, s);
-         }
-      });
+    let styleChanged = false;
+    
+    if (storeState.strokeColor !== prevState.strokeColor || storeState.strokeWidth !== prevState.strokeWidth) {
+      if (state.selectedIds.size > 0) {
+        state.selectedIds.forEach(async id => {
+           storeState.updateShape(id, { 
+             strokeColor: storeState.strokeColor,
+             strokeWidth: storeState.strokeWidth 
+           });
+           const s = storeState.shapes.find(s => s.id === id);
+           if (s) {
+             sendEvent("SHAPE_UPDATE", s);
+             await saveShapeToDB(roomId, s);
+           }
+        });
+      }
+      styleChanged = true;
     }
-    if (storeState.shapes !== prevState.shapes || storeState.activeTool !== prevState.activeTool || storeState.strokeColor !== prevState.strokeColor) {
+    
+    if (storeState.shapes !== prevState.shapes || storeState.activeTool !== prevState.activeTool || styleChanged) {
       clearCanvas(storeState.shapes, state.selectedIds, canvas, ctx);
     }
   });

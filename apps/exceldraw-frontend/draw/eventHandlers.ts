@@ -175,6 +175,7 @@ export function createEventHandlers(
       width: 0,
       height: 0,
       strokeColor: store.strokeColor,
+      strokeWidth: store.strokeWidth,
     };
     if (store.activeTool === "line" || store.activeTool === "arrow") {
       newShape.endX = state.startX;
