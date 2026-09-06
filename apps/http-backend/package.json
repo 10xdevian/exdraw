@@ -25,6 +25,7 @@
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
     "ioredis": "^6.0.0",
+    "kafkajs": "^2.2.4",
     "jsonwebtoken": "^9.0.2",
     "zod": "^4.1.8"
   }

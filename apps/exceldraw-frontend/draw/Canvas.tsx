@@ -37,6 +37,7 @@ export default function Canvas({
   const canvaRef = useRef<HTMLCanvasElement>(null);
   const selectTool = useCanvasStore((s) => s.activeTool);
   const setSelectTool = useCanvasStore((s) => s.setActiveTool);
+  const zoom = useCanvasStore((s) => s.zoom);
   const [dimensions, setDimensions] = useState({ width: 2000, height: 2000 });
   const [shareModalMode, setShareModalMode] = useState<"share" | "collaborate" | null>(null);
   const setDrawingsOpen = useUIStore(s => s.setDrawingsOpen);
@@ -93,12 +94,25 @@ export default function Canvas({
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    let cleanupFn: (() => void) | undefined;
+
     if (canvaRef.current) {
-      const cleanup = DrawCanva(canvaRef.current, roomId, socket);
-      return () => {
-        // cleanup if implemented
-      };
+      DrawCanva(canvaRef.current, roomId, socket).then((fn) => {
+        if (cancelled) {
+          // Effect already re-ran or unmounted before setup finished —
+          // tear down the listeners we just attached instead of leaking them.
+          fn?.();
+        } else {
+          cleanupFn = fn;
+        }
+      });
     }
+
+    return () => {
+      cancelled = true;
+      cleanupFn?.();
+    };
   }, [canvaRef, socket, isCollaborating, roomId]);
 
   return (
@@ -269,11 +283,11 @@ export default function Canvas({
            <div className="absolute inset-x-2 inset-y-4 border border-purple-500/50 rounded bg-purple-500/10"></div>
         </div>
         <div className="flex items-center justify-between p-1.5 bg-[#09090b] border border-white/10 rounded-xl shadow-xl">
-          <ToolButton icon={<Minus />} active={false} onClick={() => {}} />
-          <span className="text-xs font-medium px-2">75%</span>
-          <ToolButton icon={<Plus />} active={false} onClick={() => {}} />
+          <ToolButton icon={<Minus />} active={false} onClick={() => useCanvasStore.getState().setZoom(zoom - 0.1)} />
+          <span className="text-xs font-medium px-2 w-10 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
+          <ToolButton icon={<Plus />} active={false} onClick={() => useCanvasStore.getState().setZoom(zoom + 0.1)} />
           <div className="w-px h-4 bg-white/10 mx-1"></div>
-          <ToolButton icon={<Maximize />} active={false} onClick={() => {}} />
+          <ToolButton icon={<Maximize />} active={false} onClick={() => useCanvasStore.getState().setZoom(1)} />
         </div>
       </div>
 

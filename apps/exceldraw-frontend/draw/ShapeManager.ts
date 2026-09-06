@@ -5,6 +5,19 @@ export type HandleType = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "st
 
 const HANDLE_SIZE = 8;
 
+// Single source of truth for the text tool's font — drawShape (rendering) and
+// measureTextWidth (hit-testing for select/edit/delete) must always agree on this,
+// or clicks on text land outside the box that's actually drawn.
+export const TEXT_FONT = "24px sans-serif";
+
+export function measureTextWidth(ctx: CanvasRenderingContext2D, text: string): number {
+  ctx.save();
+  ctx.font = TEXT_FONT;
+  const width = ctx.measureText(text || "").width;
+  ctx.restore();
+  return width;
+}
+
 export function getCenter(shape: Shape) {
   if (shape.type === "line" || shape.type === "connector" || shape.type === "arrow") {
     return { x: (shape.x + (shape.endX ?? shape.x)) / 2, y: (shape.y + (shape.endY ?? shape.y)) / 2 };
@@ -28,28 +41,17 @@ export function getBoundingBox(shape: Shape) {
   return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
 }
 
-// Check if x,y hits a specific resize handle
-export function hitTestHandle(x: number, y: number, shape: Shape): HandleType {
+// Check if x,y hits a specific resize handle. x/y are WORLD coordinates (already
+// converted from the mouse event), but HANDLE_SIZE is a constant on-screen pixel size —
+// handles should stay just as easy to grab whether you're zoomed in or out. Dividing by
+// zoom converts that constant screen tolerance into the equivalent world-space tolerance.
+export function hitTestHandle(x: number, y: number, shape: Shape, zoom: number = 1): HandleType {
   const isLine = shape.type === "line" || shape.type === "connector" || shape.type === "arrow";
-  const hs = HANDLE_SIZE;
-  
-  if (isLine) {
-    let startPt = { x: shape.x, y: shape.y };
-    let endPt = { x: shape.endX ?? shape.x, y: shape.endY ?? shape.y };
-    const allShapes = useCanvasStore.getState().shapes;
+  const hs = HANDLE_SIZE / zoom;
 
-    if (shape.sourceId) {
-      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
-      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
-    }
-    if (shape.targetId) {
-      const targetShape = allShapes.find(s => s.id === shape.targetId);
-      if (targetShape) endPt = getEdgeIntersection(targetShape, shape.x, shape.y);
-    }
-    if (shape.sourceId) {
-      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
-      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
-    }
+  if (isLine) {
+    const allShapes = useCanvasStore.getState().shapes;
+    const { start: startPt, end: endPt } = resolveConnectorEndpoints(shape, allShapes);
 
     if (Math.abs(x - startPt.x) <= hs && Math.abs(y - startPt.y) <= hs) return "start";
     if (Math.abs(x - endPt.x) <= hs && Math.abs(y - endPt.y) <= hs) return "end";
@@ -74,18 +76,21 @@ export function hitTestHandle(x: number, y: number, shape: Shape): HandleType {
   return null;
 }
 
-// General body hit test
-export function hitTest(x: number, y: number, shape: Shape): boolean {
+// General body hit test. x/y are WORLD coordinates; a line/connector's click tolerance
+// is a constant on-screen pixel width, so — same reasoning as hitTestHandle — it's
+// divided by zoom to land on the equivalent world-space tolerance.
+export function hitTest(x: number, y: number, shape: Shape, zoom: number = 1): boolean {
   if (shape.type === "line" || shape.type === "connector" || shape.type === "arrow") {
-    const ex = shape.endX ?? shape.x;
-    const ey = shape.endY ?? shape.y;
-    const l2 = Math.pow(ex - shape.x, 2) + Math.pow(ey - shape.y, 2);
-    if (l2 === 0) return Math.hypot(x - shape.x, y - shape.y) < 8;
-    let t = ((x - shape.x) * (ex - shape.x) + (y - shape.y) * (ey - shape.y)) / l2;
+    const tolerance = 8 / zoom;
+    const allShapes = useCanvasStore.getState().shapes;
+    const { start, end } = resolveConnectorEndpoints(shape, allShapes);
+    const l2 = Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2);
+    if (l2 === 0) return Math.hypot(x - start.x, y - start.y) < tolerance;
+    let t = ((x - start.x) * (end.x - start.x) + (y - start.y) * (end.y - start.y)) / l2;
     t = Math.max(0, Math.min(1, t));
-    const projX = shape.x + t * (ex - shape.x);
-    const projY = shape.y + t * (ey - shape.y);
-    return Math.hypot(x - projX, y - projY) < 8;
+    const projX = start.x + t * (end.x - start.x);
+    const projY = start.y + t * (end.y - start.y);
+    return Math.hypot(x - projX, y - projY) < tolerance;
   }
 
   const { minX, minY, maxX, maxY } = getBoundingBox(shape);
@@ -110,6 +115,131 @@ export function hitTest(x: number, y: number, shape: Shape): boolean {
 
   // Rect default
   return x >= minX && x <= maxX && y >= minY && y <= maxY;
+}
+
+// Every shape whose bounding box lies fully inside `container`'s — i.e. everything
+// visually "nested" inside it. Used to make dragging/resizing a container carry its
+// contents along, the way grouping works in most drawing tools. Containment is
+// transitive for bounding boxes (if C is inside B and B is inside A, C is inside A
+// too), so one flat pass against the container's own box is enough — no need to walk
+// nesting levels one at a time. Connectors are excluded: they already track their
+// source/target shapes live (see resolveConnectorEndpoints), so dragging them
+// directly as well would double-move them.
+export function getContainedShapeIds(container: Shape, shapes: Shape[]): string[] {
+  if (container.type === "line" || container.type === "connector" || container.type === "arrow" || container.type === "text") {
+    return [];
+  }
+  const { minX, minY, maxX, maxY } = getBoundingBox(container);
+  const ids: string[] = [];
+  for (const shape of shapes) {
+    if (shape.id === container.id || shape.type === "connector") continue;
+    const box = getBoundingBox(shape);
+    if (box.minX >= minX && box.maxX <= maxX && box.minY >= minY && box.maxY <= maxY) {
+      ids.push(shape.id);
+    }
+  }
+  return ids;
+}
+
+// Maps a shape's geometry through the same linear transform that took a container from
+// `origContainer`'s bounding box to `newContainer`'s — i.e. resizing the container scales
+// (and repositions) everything nested inside it by the same proportion, anchored to the
+// container's own top-left corner. Used when dragging a resize handle on a shape that has
+// other shapes nested inside it (see getContainedShapeIds).
+export function scaleContainedShape(
+  origShape: Shape,
+  origContainer: { minX: number; minY: number; w: number; h: number },
+  newContainer: { minX: number; minY: number; w: number; h: number }
+): Partial<Shape> {
+  // A zero-width/height container (degenerate, e.g. a freshly-started shape) can't define
+  // a scale ratio — fall back to 1 (pure translate) on that axis rather than dividing by zero.
+  const scaleX = origContainer.w !== 0 ? newContainer.w / origContainer.w : 1;
+  const scaleY = origContainer.h !== 0 ? newContainer.h / origContainer.h : 1;
+
+  const mapPoint = (px: number, py: number) => ({
+    x: newContainer.minX + (px - origContainer.minX) * scaleX,
+    y: newContainer.minY + (py - origContainer.minY) * scaleY,
+  });
+
+  if (origShape.type === "line" || origShape.type === "connector" || origShape.type === "arrow") {
+    const start = mapPoint(origShape.x, origShape.y);
+    const end = mapPoint(origShape.endX ?? origShape.x, origShape.endY ?? origShape.y);
+    return { x: start.x, y: start.y, endX: end.x, endY: end.y };
+  }
+
+  const topLeft = mapPoint(origShape.x, origShape.y);
+  return {
+    x: topLeft.x,
+    y: topLeft.y,
+    width: origShape.width * scaleX,
+    height: origShape.height * scaleY,
+  };
+}
+
+// Picks the best shape hit at (x, y) out of `shapes`. Our shapes are unfilled outlines,
+// so hitTest treats a shape's whole bounding box as "inside it" — meaning a big
+// container shape's box always fully overlaps anything nested inside it. Picking by
+// z-order alone (last drawn wins) means that container permanently steals every click
+// meant for something nested inside it, no matter how deep you click. Instead, among
+// everything under the cursor, prefer the shape with the SMALLEST bounding-box area —
+// the most specific target — and only fall back to z-order (highest sequenceNumber) to
+// break ties between same-sized candidates.
+//
+// Text is the one exception to "smallest wins": a label sitting on a shape (the common
+// "server" box + "server" text pattern) is *always* the smallest thing at that point, so
+// smallest-area-wins would mean a label permanently steals every click meant for the
+// shape it's labeling — you could never grab the box itself to drag it, only the text.
+// So text is a fallback tier: it's only picked when nothing else (rect/circle/diamond/
+// line/connector) also covers that point. handleDoubleClick's text-only filter is
+// unaffected — with every candidate already text, this tier split is a no-op there.
+export function findHitShape(x: number, y: number, shapes: Shape[], filter?: (shape: Shape) => boolean, zoom: number = 1): Shape | null {
+  const pick = (candidates: Shape[]) => {
+    let best: Shape | null = null;
+    let bestArea = Infinity;
+    let bestSeq = -Infinity;
+
+    for (const shape of candidates) {
+      if (filter && !filter(shape)) continue;
+      if (!hitTest(x, y, shape, zoom)) continue;
+
+      const { w, h } = getBoundingBox(shape);
+      const area = Math.max(w, 0) * Math.max(h, 0);
+      const seq = shape.sequenceNumber || 0;
+
+      if (area < bestArea || (area === bestArea && seq > bestSeq)) {
+        best = shape;
+        bestArea = area;
+        bestSeq = seq;
+      }
+    }
+
+    return best;
+  };
+
+  const nonText = shapes.filter(s => s.type !== "text");
+  const textOnly = shapes.filter(s => s.type === "text");
+  return pick(nonText) ?? pick(textOnly);
+}
+
+// Resolves the actual drawn endpoints of a line/connector/arrow, always against the
+// LIVE position of whatever it's attached to. Used by rendering, hit-testing, and
+// handle-testing alike so a connector never goes stale relative to what's on screen.
+export function resolveConnectorEndpoints(shape: Shape, allShapes: Shape[]): { start: { x: number, y: number }, end: { x: number, y: number } } {
+  const sourceShape = shape.sourceId ? allShapes.find(s => s.id === shape.sourceId) : undefined;
+  const targetShape = shape.targetId ? allShapes.find(s => s.id === shape.targetId) : undefined;
+
+  let start = { x: shape.x, y: shape.y };
+  let end = { x: shape.endX ?? shape.x, y: shape.endY ?? shape.y };
+
+  // Use the connected shapes' live centers (not the connector's cached x/y) as the
+  // aiming point, so the edge intersection is correct no matter how far either end moved.
+  const sourceCenter = sourceShape ? getCenter(sourceShape) : start;
+  const targetCenter = targetShape ? getCenter(targetShape) : end;
+
+  if (sourceShape) start = getEdgeIntersection(sourceShape, targetCenter.x, targetCenter.y);
+  if (targetShape) end = getEdgeIntersection(targetShape, sourceCenter.x, sourceCenter.y);
+
+  return { start, end };
 }
 
 export function getEdgeIntersection(shape: Shape, pointX: number, pointY: number): { x: number, y: number } {
@@ -151,7 +281,7 @@ export function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, allShapes
   const { minX, minY, w, h } = getBoundingBox(shape);
 
   if (shape.type === "text") {
-    ctx.font = "24px sans-serif";
+    ctx.font = TEXT_FONT;
     ctx.fillStyle = shape.strokeColor || "white";
     ctx.textBaseline = "top";
     ctx.fillText(shape.text || "", shape.x, shape.y);
@@ -168,22 +298,7 @@ export function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, allShapes
     ctx.closePath();
     ctx.stroke();
   } else if (shape.type === "line" || shape.type === "connector" || shape.type === "arrow") {
-    let startPt = { x: shape.x, y: shape.y };
-    let endPt = { x: shape.endX ?? shape.x, y: shape.endY ?? shape.y };
-
-    if (shape.sourceId) {
-      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
-      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
-    }
-    if (shape.targetId) {
-      const targetShape = allShapes.find(s => s.id === shape.targetId);
-      if (targetShape) endPt = getEdgeIntersection(targetShape, shape.x, shape.y);
-    }
-    // Re-evaluate startPt against new endPt to be perfectly flush
-    if (shape.sourceId) {
-      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
-      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
-    }
+    const { start: startPt, end: endPt } = resolveConnectorEndpoints(shape, allShapes);
 
     ctx.moveTo(startPt.x, startPt.y);
     ctx.lineTo(endPt.x, endPt.y);
@@ -194,41 +309,31 @@ export function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, allShapes
 function maxX(shape: Shape) { return getBoundingBox(shape).maxX; }
 function maxY(shape: Shape) { return getBoundingBox(shape).maxY; }
 
-export function drawSelectionBox(ctx: CanvasRenderingContext2D, shape: Shape) {
+// zoom keeps the selection handles/padding a constant on-screen size — since this draws
+// in world space under the canvas's zoom transform, dividing by zoom here is what cancels
+// that scale back out (same reasoning as hitTestHandle's tolerance).
+export function drawSelectionBox(ctx: CanvasRenderingContext2D, shape: Shape, zoom: number = 1) {
   const { minX, minY, maxX, maxY, w, h } = getBoundingBox(shape);
-  const hs = HANDLE_SIZE / 2;
-  const padding = 6;
-  
+  const HANDLE_SIZE_WORLD = HANDLE_SIZE / zoom;
+  const hs = HANDLE_SIZE_WORLD / 2;
+  const padding = 6 / zoom;
+
   ctx.save();
   ctx.strokeStyle = "#a855f7"; // Purple
-  ctx.lineWidth = 1;
+  ctx.lineWidth = 1 / zoom;
   
   if (shape.type === "line" || shape.type === "connector" || shape.type === "arrow") {
     // Draw endpoints handles
     ctx.fillStyle = "white";
-    
-    let startPt = { x: shape.x, y: shape.y };
-    let endPt = { x: shape.endX ?? shape.x, y: shape.endY ?? shape.y };
+
     const allShapes = useCanvasStore.getState().shapes;
+    const { start: startPt, end: endPt } = resolveConnectorEndpoints(shape, allShapes);
 
-    if (shape.sourceId) {
-      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
-      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
-    }
-    if (shape.targetId) {
-      const targetShape = allShapes.find(s => s.id === shape.targetId);
-      if (targetShape) endPt = getEdgeIntersection(targetShape, shape.x, shape.y);
-    }
-    if (shape.sourceId) {
-      const sourceShape = allShapes.find(s => s.id === shape.sourceId);
-      if (sourceShape) startPt = getEdgeIntersection(sourceShape, endPt.x, endPt.y);
-    }
+    ctx.fillRect(startPt.x - hs, startPt.y - hs, HANDLE_SIZE_WORLD, HANDLE_SIZE_WORLD);
+    ctx.strokeRect(startPt.x - hs, startPt.y - hs, HANDLE_SIZE_WORLD, HANDLE_SIZE_WORLD);
 
-    ctx.fillRect(startPt.x - hs, startPt.y - hs, HANDLE_SIZE, HANDLE_SIZE);
-    ctx.strokeRect(startPt.x - hs, startPt.y - hs, HANDLE_SIZE, HANDLE_SIZE);
-    
-    ctx.fillRect(endPt.x - hs, endPt.y - hs, HANDLE_SIZE, HANDLE_SIZE);
-    ctx.strokeRect(endPt.x - hs, endPt.y - hs, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.fillRect(endPt.x - hs, endPt.y - hs, HANDLE_SIZE_WORLD, HANDLE_SIZE_WORLD);
+    ctx.strokeRect(endPt.x - hs, endPt.y - hs, HANDLE_SIZE_WORLD, HANDLE_SIZE_WORLD);
   } else {
     // Draw dashed bounding box
     ctx.setLineDash([5, 5]);
@@ -238,8 +343,8 @@ export function drawSelectionBox(ctx: CanvasRenderingContext2D, shape: Shape) {
     ctx.setLineDash([]);
     ctx.fillStyle = "white";
     const drawHandle = (x: number, y: number) => {
-      ctx.fillRect(x - hs, y - hs, HANDLE_SIZE, HANDLE_SIZE);
-      ctx.strokeRect(x - hs, y - hs, HANDLE_SIZE, HANDLE_SIZE);
+      ctx.fillRect(x - hs, y - hs, HANDLE_SIZE_WORLD, HANDLE_SIZE_WORLD);
+      ctx.strokeRect(x - hs, y - hs, HANDLE_SIZE_WORLD, HANDLE_SIZE_WORLD);
     };
 
     const midX = (minX + maxX) / 2;

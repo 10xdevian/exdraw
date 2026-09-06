@@ -50,20 +50,24 @@ export async function DrawCanva(
       styleChanged = true;
     }
     
-    if (storeState.shapes !== prevState.shapes || storeState.activeTool !== prevState.activeTool || styleChanged) {
-      clearCanvas(storeState.shapes, state.selectedIds, canvas, ctx);
+    // zoom lives in the store (reactive — see canvasStore.ts), so a redraw here is what
+    // makes the +/- toolbar buttons actually repaint the canvas. Pan does NOT live here
+    // (InteractionState, mutated imperatively) — the wheel handler redraws for that itself.
+    if (storeState.shapes !== prevState.shapes || storeState.activeTool !== prevState.activeTool || storeState.zoom !== prevState.zoom || styleChanged) {
+      clearCanvas(storeState.shapes, state.selectedIds, canvas, ctx, { panX: state.panX, panY: state.panY, zoom: storeState.zoom });
     }
   });
 
-  clearCanvas(useCanvasStore.getState().shapes, state.selectedIds, canvas, ctx);
+  clearCanvas(useCanvasStore.getState().shapes, state.selectedIds, canvas, ctx, { panX: state.panX, panY: state.panY, zoom: useCanvasStore.getState().zoom });
 
   const handlers = createEventHandlers(canvas, ctx, roomId, state, sendEvent);
-  
+
   canvas.addEventListener("mousedown", handlers.handleMouseDown);
   canvas.addEventListener("mousemove", handlers.handleMouseMove);
   canvas.addEventListener("mouseup", handlers.handleMouseUp);
   canvas.addEventListener("mouseleave", handlers.handleMouseUp);
   canvas.addEventListener("dblclick", handlers.handleDoubleClick);
+  canvas.addEventListener("wheel", handlers.handleWheel, { passive: false });
   window.addEventListener("keydown", handlers.handleKeyDown);
 
   return () => {
@@ -73,6 +77,7 @@ export async function DrawCanva(
     canvas.removeEventListener("mouseup", handlers.handleMouseUp);
     canvas.removeEventListener("mouseleave", handlers.handleMouseUp);
     canvas.removeEventListener("dblclick", handlers.handleDoubleClick);
+    canvas.removeEventListener("wheel", handlers.handleWheel);
     window.removeEventListener("keydown", handlers.handleKeyDown);
     cleanupNetwork();
   };

@@ -1,6 +1,7 @@
 import { Kafka, EachMessagePayload } from "kafkajs";
 import prisma from "@repo/db/client";
 import Redis from "ioredis";
+import * as http from "http";
 
 const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 const redis = new Redis(REDIS_URL);
@@ -12,6 +13,34 @@ const kafka = new Kafka({
 
 const consumer = kafka.consumer({ groupId: "canvas-group" });
 const dlqProducer = kafka.producer();
+
+// Real, in-process counters for the control-center's Services/Errors pages. Reset on
+// restart — deliberately not trying to be a durable metrics store, just an honest
+// snapshot of "since this worker last started."
+const startedAt = Date.now();
+const metrics = {
+  eventsProcessed: 0,
+  eventsFailed: 0,
+  snapshotsCreated: 0,
+};
+
+// worker has no other reason to speak HTTP — this exists solely so the control-center
+// dashboard has something to poll for liveness/throughput, the same way it polls
+// http-backend's and ws-backend's /health and /metrics.
+const METRICS_PORT = Number(process.env.WORKER_METRICS_PORT || 9095);
+http.createServer((req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  if (req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", uptimeMs: Date.now() - startedAt }));
+  } else if (req.url === "/metrics") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ uptimeMs: Date.now() - startedAt, ...metrics }));
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+}).listen(METRICS_PORT, () => console.log(`[metrics] worker health/metrics on :${METRICS_PORT}`));
 
 // Mock S3 Service for Snapshots
 class S3Service {
@@ -103,6 +132,7 @@ async function processEvent(payload: EachMessagePayload) {
 
     const finalShapes = Array.from(shapesMap.values());
     const s3Key = await S3Service.uploadSnapshot(roomId, finalShapes);
+    metrics.snapshotsCreated++;
 
     // Save snapshot metadata
     await prisma.snapshot.upsert({
@@ -139,8 +169,10 @@ async function run() {
     eachMessage: async (payload) => {
       try {
         await processEvent(payload);
+        metrics.eventsProcessed++;
       } catch (error) {
         console.error("Error processing message, routing to DLQ", error);
+        metrics.eventsFailed++;
         // DEAD LETTER QUEUE (DLQ)
         if (payload.message.value) {
           await dlqProducer.send({

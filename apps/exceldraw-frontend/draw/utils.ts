@@ -1,6 +1,7 @@
 import axios from "axios";
 import { BACKEND_URL, Shape } from "@repo/shared";
 import { drawShape, drawSelectionBox } from "./ShapeManager";
+import { Viewport } from "./viewport";
 
 export function generateId() {
   return Math.random().toString(36).substring(2, 15);
@@ -22,15 +23,26 @@ export function clearCanvas(
   selectedIds: Set<string>,
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
+  viewport: Viewport = { panX: 0, panY: 0, zoom: 1 },
 ) {
+  // Clear in device pixels first, with the transform reset — clearRect respects the
+  // current transform too, so clearing while panned/zoomed can leave stale pixels
+  // outside the transformed rect.
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
+
+  // Everything drawn after this point is in world space; the transform maps it to
+  // screen space. Shapes themselves never need pan/zoom baked into their own coordinates.
+  ctx.setTransform(viewport.zoom, 0, 0, viewport.zoom, viewport.panX, viewport.panY);
 
   const sortedShapes = [...shapes].sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
 
   sortedShapes.forEach((shape) => {
     drawShape(ctx, shape, shapes);
     if (selectedIds.has(shape.id)) {
-      drawSelectionBox(ctx, shape);
+      drawSelectionBox(ctx, shape, viewport.zoom);
     }
   });
 }

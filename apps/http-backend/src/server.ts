@@ -7,9 +7,12 @@ import { JWT_SECRET } from "@repo/shared";
 import prisma from "@repo/db/client";
 import bcrypt from "bcryptjs";
 import cors from "cors";
+import controlCenterRouter, { requestCounterMiddleware } from "./controlCenter";
 const app = express();
 app.use(express.json());
 app.use(cors());
+app.use(requestCounterMiddleware);
+app.use("/control-center", controlCenterRouter);
 
 app.post("/signup", async (req, res) => {
   const { username, email, password } = req.body;
@@ -115,6 +118,22 @@ app.post("/room", authMiddleware, async (req, res) => {
 import Redis from "ioredis";
 const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 const redis = new Redis(REDIS_URL);
+
+// Mirrors ws-backend's nextRoomSequence: the room-scoped sequence counter every client
+// uses to reject stale/out-of-order updates (see network.ts) and as its "resume from
+// here" cursor on reconnect. /room/:slug/sync is the one writer of Chat rows that isn't
+// going through the WS live path — it MUST hand out numbers from the exact same counter,
+// or these rows land in a different sequence space than everything else in the room and
+// desync every client that later touches a shape shared this way.
+async function nextRoomSequence(roomId: number): Promise<number> {
+  const seqKey = `room_seq:${roomId}`;
+  const alreadySeeded = await redis.exists(seqKey);
+  if (!alreadySeeded) {
+    const { _max } = await prisma.chat.aggregate({ where: { roomId }, _max: { id: true } });
+    await redis.set(seqKey, _max.id || 0, "NX");
+  }
+  return redis.incr(seqKey);
+}
 
 app.get("/chats/:slug", async (req, res) => {
   const slug = req.params.slug;
@@ -343,11 +362,37 @@ app.post("/room/:slug/sync", async (req, res) => {
   }
 
   if (shapes && shapes.length > 0) {
-    const chats = shapes.map((shape: any) => ({
-      roomId: room.id,
-      message: JSON.stringify({ shape }),
-      userId
-    }));
+    // IMPORTANT: every other writer of `chat.message` (ws-backend's "chat" handler,
+    // the worker's snapshot compaction, and the frontend's WS sync replay) expects the
+    // canonical CanvasEvent envelope { eventId, clientId, roomId, timestamp, action, payload }.
+    // Writing a bare { shape } here used to desync clients that reconnect: the WS "sync"
+    // catch-up replays these rows verbatim, network.ts parses them as a CanvasEvent, finds
+    // no `.payload`, and fails trying to persist a shape with no `id`.
+    const now = Date.now();
+    const chats = [];
+    for (const shape of shapes as any[]) {
+      // Sequential, not batched: each row needs its own strictly-increasing sequenceNumber
+      // in the same counter the WS live path uses (see nextRoomSequence above) — otherwise
+      // a reconnecting client resumes catch-up from the wrong cursor and either misses these
+      // rows or, worse, caches a sequenceNumber for these shapes that's out of step with the
+      // live counter, making every future live update to them look "stale" and get dropped.
+      const sequenceNumber = await nextRoomSequence(room.id);
+      const event = {
+        eventId: crypto.randomUUID(),
+        clientId: `sync-${room.id}`,
+        roomId: slug,
+        timestamp: now,
+        action: "SHAPE_ADD",
+        payload: shape,
+      };
+      chats.push({
+        roomId: room.id,
+        eventId: event.eventId,
+        message: JSON.stringify(event),
+        sequenceNumber,
+        userId,
+      });
+    }
     await prisma.chat.createMany({ data: chats });
   }
 

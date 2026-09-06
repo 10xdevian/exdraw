@@ -1,9 +1,12 @@
 import { Shape, CanvasEvent } from "@repo/shared";
-import { useCanvasStore } from "../store/canvasStore";
+import { useCanvasStore, MIN_ZOOM, MAX_ZOOM } from "../store/canvasStore";
 import { InteractionState } from "./InteractionState";
-import { getCenter, getBoundingBox, hitTest, hitTestHandle } from "./ShapeManager";
+import { getCenter, getBoundingBox, hitTestHandle, findHitShape, getContainedShapeIds, scaleContainedShape } from "./ShapeManager";
 import { generateId, throttle, clearCanvas } from "./utils";
-import { saveShapeToDB, saveShapesToDB, deleteShapeFromDB, deleteShapesFromDB } from "../lib/db";
+import { saveShapeToDB, deleteShapeFromDB, deleteShapesFromDB } from "../lib/db";
+import { toWorld } from "./viewport";
+import { updateConnectorsForShape as syncConnectorsForShape } from "./connectors";
+import { createTextEditing } from "./textEditing";
 
 export function createEventHandlers(
   canvas: HTMLCanvasElement,
@@ -16,120 +19,49 @@ export function createEventHandlers(
     sendEvent("SHAPE_UPDATE", shape);
   }, 50);
 
-  const updateConnectorsForShape = (movedShapeId: string) => {
-    const store = useCanvasStore.getState();
-    const connectorsToUpdate: Shape[] = [];
-    const movedShape = store.shapes.find(s => s.id === movedShapeId);
-    if (!movedShape) return;
-    const center = getCenter(movedShape);
-
-    store.shapes.forEach(shape => {
-      if (shape.type === "connector") {
-        let updated = false;
-        let newConnector = { ...shape };
-        
-        if (shape.sourceId === movedShapeId) {
-           newConnector.x = center.x;
-           newConnector.y = center.y;
-           updated = true;
-        }
-        if (shape.targetId === movedShapeId) {
-           newConnector.endX = center.x;
-           newConnector.endY = center.y;
-           updated = true;
-        }
-        
-        if (updated) {
-          store.updateShape(newConnector.id, newConnector);
-          connectorsToUpdate.push(newConnector);
-        }
-      }
-    });
-    
-    connectorsToUpdate.forEach(conn => throttledUpdateBroadcast(conn));
+  // Every mouse event carries SCREEN coordinates (event.clientX/Y); every shape lives in
+  // WORLD coordinates. This is the one conversion point all handlers below go through —
+  // see viewport.ts for why panning/zooming means these are no longer the same thing.
+  const worldPoint = (clientX: number, clientY: number) => {
+    const zoom = useCanvasStore.getState().zoom;
+    return toWorld(clientX, clientY, canvas, { panX: state.panX, panY: state.panY, zoom });
   };
 
-  const spawnTextInput = (x: number, y: number, existingShape?: Shape) => {
-    if ((state as any).isEditingText) return;
-    (state as any).isEditingText = true;
+  const currentViewport = () => ({ panX: state.panX, panY: state.panY, zoom: useCanvasStore.getState().zoom });
 
-    const store = useCanvasStore.getState();
-    const input = document.createElement("textarea");
-    input.style.position = "fixed";
-    input.style.left = `${x}px`;
-    input.style.top = `${y}px`;
-    input.style.background = "transparent";
-    input.style.color = existingShape?.strokeColor || store.strokeColor || "white";
-    input.style.border = "1px solid #a855f7";
-    input.style.outline = "none";
-    input.style.font = "24px sans-serif";
-    input.style.minWidth = "100px";
-    input.style.minHeight = "40px";
-    input.style.zIndex = "9999";
-    input.value = existingShape?.text || "";
-    document.body.appendChild(input);
-    input.focus();
+  const updateConnectorsForShape = (movedShapeId: string) => syncConnectorsForShape(movedShapeId, throttledUpdateBroadcast);
 
-    const finishEditing = async () => {
-      if (!(state as any).isEditingText) return;
-      (state as any).isEditingText = false;
-      const val = input.value.trim();
-      document.body.removeChild(input);
-      store.setActiveTool("select");
-      if (val) {
-        if (existingShape) {
-          store.updateShape(existingShape.id, { text: val, width: val.length * 14 });
-          const updated = store.shapes.find(s => s.id === existingShape.id);
-          if (updated) {
-            sendEvent("SHAPE_UPDATE", updated);
-            await saveShapeToDB(roomId, updated);
-          }
-        } else {
-          const id = generateId();
-          const newShape: Shape = {
-            id, type: "text", x, y, width: val.length * 14, height: 28, text: val, strokeColor: store.strokeColor || "white"
-          };
-          store.addShape(newShape);
-          sendEvent("SHAPE_ADD", newShape);
-          await saveShapeToDB(roomId, newShape);
-        }
-      } else if (existingShape) {
-        sendEvent("SHAPE_DELETE", { id: existingShape.id });
-        store.setShapes(store.shapes.filter(s => s.id !== existingShape.id));
-        await deleteShapeFromDB(roomId, existingShape.id);
-      }
-    };
-
-    input.onblur = finishEditing;
-    input.onkeydown = (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        input.blur();
-      }
-    };
-  };
+  const { spawnTextInput } = createTextEditing({ canvas, ctx, roomId, state, sendEvent });
 
   const handleDoubleClick = (event: MouseEvent) => {
     const store = useCanvasStore.getState();
     if (store.activeTool !== "select") return;
 
-    const sortedShapes = [...store.shapes].sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
-    let hitShape: Shape | null = null;
-    for (let i = sortedShapes.length - 1; i >= 0; i--) {
-      const s = sortedShapes[i];
-      if (s && hitTest(event.clientX, event.clientY, s) && s.type === "text") {
-        hitShape = s;
-        break;
-      }
-    }
+    const world = worldPoint(event.clientX, event.clientY);
+    const hitShape = findHitShape(world.x, world.y, store.shapes, s => s.type === "text", store.zoom);
 
-    if (hitShape) spawnTextInput(event.clientX, event.clientY, hitShape);
+    // Position the edit box at the shape's own origin, not wherever the double-click
+    // landed. The original text stays drawn on the canvas, unchanged, until editing
+    // finishes — placing the textarea at the click point (often mid- or end-of-string,
+    // never the shape's actual top-left) left the old rendered text sitting in one spot
+    // and a second, empty-looking editable box floating elsewhere: it read as "a new
+    // text area opened" rather than "the existing one became editable."
+    if (hitShape) spawnTextInput(hitShape.x, hitShape.y, hitShape);
   };
 
   const handleMouseDown = (event: MouseEvent) => {
+    // The canvas itself isn't a focusable element. Per the HTML spec, a mousedown whose
+    // target isn't focusable runs a default action AFTER our listener that blurs whatever
+    // currently has focus — including the <textarea> the text tool creates and focuses
+    // synchronously right here in this same handler. Without this, spawnTextInput's input
+    // is focused for a single tick and then immediately un-focused by the browser itself,
+    // which fires our onblur → finishEditing → the shape never actually gets created.
+    event.preventDefault();
+
     const store = useCanvasStore.getState();
-    state.startX = event.clientX;
-    state.startY = event.clientY;
+    const world = worldPoint(event.clientX, event.clientY);
+    state.startX = world.x;
+    state.startY = world.y;
 
     if (store.activeTool === "text") {
        spawnTextInput(state.startX, state.startY);
@@ -142,25 +74,24 @@ export function createEventHandlers(
       for (const id of state.selectedIds) {
          const shape = store.shapes.find(s => s.id === id);
          if (shape) {
-           const handle = hitTestHandle(state.startX, state.startY, shape);
+           const handle = hitTestHandle(state.startX, state.startY, shape, store.zoom);
            if (handle) {
              state.isDrawingOrDragging = true;
              state.activeHandle = handle;
              state.currentShapeId = shape.id;
              state.originalShapeData = { ...shape };
+             state.containedOriginalData = new Map(
+               getContainedShapeIds(shape, store.shapes).map(id => {
+                 const contained = store.shapes.find(s => s.id === id)!;
+                 return [id, { ...contained }] as const;
+               })
+             );
              return;
            }
          }
       }
 
-      let hitShape: Shape | null = null;
-      for (let i = sortedShapes.length - 1; i >= 0; i--) {
-        const s = sortedShapes[i];
-        if (s && hitTest(state.startX, state.startY, s)) {
-          hitShape = s;
-          break;
-        }
-      }
+      const hitShape = findHitShape(state.startX, state.startY, sortedShapes, undefined, store.zoom);
 
       if (hitShape) {
         if (!state.selectedIds.has(hitShape.id)) {
@@ -171,10 +102,16 @@ export function createEventHandlers(
         state.activeHandle = "body";
         state.currentShapeId = hitShape.id;
         state.dragOffset = { x: state.startX, y: state.startY };
+        state.containedOriginalData = new Map(
+          getContainedShapeIds(hitShape, store.shapes).map(id => {
+            const contained = store.shapes.find(s => s.id === id)!;
+            return [id, { ...contained }] as const;
+          })
+        );
       } else {
         state.selectedIds.clear();
       }
-      clearCanvas(store.shapes, state.selectedIds, canvas, ctx);
+      clearCanvas(store.shapes, state.selectedIds, canvas, ctx, currentViewport());
       return;
     }
 
@@ -206,14 +143,19 @@ export function createEventHandlers(
     const store = useCanvasStore.getState();
     const currentShape = store.shapes.find(s => s.id === state.currentShapeId);
     if (!currentShape) return;
+    const world = worldPoint(event.clientX, event.clientY);
 
     if (store.activeTool === "select") {
       if (state.activeHandle === "body") {
-        const deltaX = event.clientX - state.dragOffset.x;
-        const deltaY = event.clientY - state.dragOffset.y;
-        state.dragOffset = { x: event.clientX, y: event.clientY };
+        const deltaX = world.x - state.dragOffset.x;
+        const deltaY = world.y - state.dragOffset.y;
+        state.dragOffset = { x: world.x, y: world.y };
 
-        state.selectedIds.forEach(id => {
+        // Everything nested inside the dragged shape (snapshotted at drag-start) rides
+        // along by the same incremental delta as the shapes actually being dragged.
+        const idsToMove = new Set([...state.selectedIds, ...state.containedOriginalData.keys()]);
+
+        idsToMove.forEach(id => {
           const shape = store.shapes.find(s => s.id === id);
           if (shape) {
             const updates: Partial<Shape> = { x: shape.x + deltaX, y: shape.y + deltaY };
@@ -222,7 +164,7 @@ export function createEventHandlers(
                updates.endY = (shape.endY ?? shape.y) + deltaY;
             }
             store.updateShape(id, updates);
-            
+
             const updatedShape = store.shapes.find(s => s.id === id);
             if (updatedShape) {
                throttledUpdateBroadcast(updatedShape);
@@ -231,20 +173,16 @@ export function createEventHandlers(
           }
         });
       } else if (state.activeHandle && state.originalShapeData) {
-        const deltaX = event.clientX - state.startX;
-        const deltaY = event.clientY - state.startY;
+        const deltaX = world.x - state.startX;
+        const deltaY = world.y - state.startY;
         let updates: Partial<Shape> = {};
-        
+
         if (state.originalShapeData.type === "line" || state.originalShapeData.type === "connector" || state.originalShapeData.type === "arrow") {
-           let snapCenter: {x: number, y: number} | null = null;
-           for (const s of store.shapes) {
-              if (s.id !== state.currentShapeId && (s.type === "rect" || s.type === "circle" || s.type === "diamond")) {
-                 if (hitTest(event.clientX, event.clientY, s)) {
-                    snapCenter = getCenter(s);
-                    break;
-                 }
-              }
-           }
+           const snapTarget = findHitShape(world.x, world.y, store.shapes, s =>
+              s.id !== state.currentShapeId && (s.type === "rect" || s.type === "circle" || s.type === "diamond"),
+              store.zoom
+           );
+           const snapCenter = snapTarget ? getCenter(snapTarget) : null;
            if (state.activeHandle === "start") {
              updates = { x: snapCenter ? snapCenter.x : state.originalShapeData.x + deltaX, y: snapCenter ? snapCenter.y : state.originalShapeData.y + deltaY };
            } else if (state.activeHandle === "end") {
@@ -263,8 +201,24 @@ export function createEventHandlers(
            if (state.activeHandle.includes("e")) { newW = width + deltaX; }
            
            updates = { x: newX, y: newY, width: newW, height: newH };
+
+           // Scale everything nested inside this shape (snapshotted at drag-start) by the
+           // same proportion the container itself just changed by, anchored to its new
+           // top-left — resizing the container resizes its contents, not just the outline.
+           if (state.containedOriginalData.size > 0) {
+              const origContainerBox = { minX: x, minY: y, w: width, h: height };
+              const newContainerBox = { minX: newX, minY: newY, w: newW, h: newH };
+              state.containedOriginalData.forEach((origShape, id) => {
+                 store.updateShape(id, scaleContainedShape(origShape, origContainerBox, newContainerBox));
+                 const updatedContained = store.shapes.find(s => s.id === id);
+                 if (updatedContained) {
+                    throttledUpdateBroadcast(updatedContained);
+                    updateConnectorsForShape(id);
+                 }
+              });
+           }
         }
-        
+
         store.updateShape(state.currentShapeId, updates);
         const updatedShape = store.shapes.find(s => s.id === state.currentShapeId);
         if (updatedShape) {
@@ -275,22 +229,18 @@ export function createEventHandlers(
       return;
     }
 
-    const width = event.clientX - state.startX;
-    const height = event.clientY - state.startY;
+    const width = world.x - state.startX;
+    const height = world.y - state.startY;
 
     if (currentShape.type === "line" || currentShape.type === "arrow") {
-      let snapCenter: {x: number, y: number} | null = null;
-      for (const s of store.shapes) {
-         if (s.id !== state.currentShapeId && (s.type === "rect" || s.type === "circle" || s.type === "diamond")) {
-            if (hitTest(event.clientX, event.clientY, s)) {
-               snapCenter = getCenter(s);
-               break;
-            }
-         }
-      }
-      store.updateShape(state.currentShapeId, { 
-         endX: snapCenter ? snapCenter.x : event.clientX, 
-         endY: snapCenter ? snapCenter.y : event.clientY 
+      const snapTarget = findHitShape(world.x, world.y, store.shapes, s =>
+         s.id !== state.currentShapeId && (s.type === "rect" || s.type === "circle" || s.type === "diamond"),
+         store.zoom
+      );
+      const snapCenter = snapTarget ? getCenter(snapTarget) : null;
+      store.updateShape(state.currentShapeId, {
+         endX: snapCenter ? snapCenter.x : world.x,
+         endY: snapCenter ? snapCenter.y : world.y
       });
     } else {
       store.updateShape(state.currentShapeId, { width, height });
@@ -311,15 +261,14 @@ export function createEventHandlers(
         if (state.activeHandle === "start" || state.activeHandle === "end") {
            const ptX = state.activeHandle === "start" ? finishedShape.x : (finishedShape.endX ?? finishedShape.x);
            const ptY = state.activeHandle === "start" ? finishedShape.y : (finishedShape.endY ?? finishedShape.y);
-           
-           let hitTarget: Shape | null = null;
-           for (let i = store.shapes.length - 1; i >= 0; i--) {
-             const s = store.shapes[i];
-             if (s && s.id !== finishedShape.id && (s.type === "rect" || s.type === "circle" || s.type === "diamond")) {
-                if (hitTest(ptX, ptY, s)) { hitTarget = s; break; }
-             }
-           }
-           
+           const finishedShapeId = finishedShape.id;
+
+           const hitTarget = findHitShape(ptX, ptY, store.shapes, s =>
+              s.id !== finishedShapeId && (s.type === "rect" || s.type === "circle" || s.type === "diamond"),
+              store.zoom
+           );
+
+
            if (hitTarget) {
              const c = getCenter(hitTarget);
              store.updateShape(finishedShape.id, {
@@ -343,7 +292,12 @@ export function createEventHandlers(
            finishedShape = store.shapes.find(s => s.id === state.currentShapeId) || finishedShape;
         }
 
-        for (const id of state.selectedIds) {
+        // Persist the container itself/selection, plus anything that rode along nested
+        // inside it (see getContainedShapeIds / containedOriginalData) — both the drag
+        // and the resize path only mutated the store in-memory; this is what actually
+        // saves and broadcasts those moved/rescaled contents.
+        const idsToPersist = new Set([...state.selectedIds, ...state.containedOriginalData.keys()]);
+        for (const id of idsToPersist) {
            const shape = store.shapes.find(s => s.id === id);
            if (shape) {
              sendEvent("SHAPE_UPDATE", shape);
@@ -358,18 +312,15 @@ export function createEventHandlers(
              }
            }
         }
+        state.containedOriginalData = new Map();
       } else {
         if (finishedShape.type === "line" || finishedShape.type === "arrow") {
-           let sourceShape: Shape | null = null;
-           let targetShape: Shape | null = null;
-           const sortedShapes = [...store.shapes].sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
-           for (let i = sortedShapes.length - 1; i >= 0; i--) {
-             const s = sortedShapes[i];
-             if (s && s.id !== finishedShape.id && (s.type === "rect" || s.type === "circle" || s.type === "diamond")) {
-                if (!sourceShape && hitTest(state.startX, state.startY, s)) sourceShape = s;
-                if (!targetShape && hitTest(event.clientX, event.clientY, s)) targetShape = s;
-             }
-           }
+           const finishedShapeId = finishedShape.id;
+           const isAnchorCandidate = (s: Shape) =>
+              s.id !== finishedShapeId && (s.type === "rect" || s.type === "circle" || s.type === "diamond");
+           const world = worldPoint(event.clientX, event.clientY);
+           const sourceShape = findHitShape(state.startX, state.startY, store.shapes, isAnchorCandidate, store.zoom);
+           const targetShape = findHitShape(world.x, world.y, store.shapes, isAnchorCandidate, store.zoom);
            if (sourceShape && targetShape && sourceShape.id !== targetShape.id) {
              const sc = getCenter(sourceShape);
              const tc = getCenter(targetShape);
@@ -416,6 +367,17 @@ export function createEventHandlers(
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
+    // This listener is bound on `window`, so it also sees every keystroke typed into the
+    // text tool's floating <textarea> (keydown bubbles there too). Without this guard,
+    // Backspace/Delete while editing text — the shape is almost always still "selected"
+    // from the click/double-click that opened it — deletes the whole shape mid-edit
+    // instead of removing a character, and Ctrl/Cmd+A hijacks the browser's native
+    // select-all-text-in-input into this app's select-all-shapes shortcut.
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable)) {
+      return;
+    }
+
     if ((e.key === "Backspace" || e.key === "Delete") && state.selectedIds.size > 0) {
        const store = useCanvasStore.getState();
        if (state.selectedIds.size === 1) {
@@ -433,13 +395,40 @@ export function createEventHandlers(
          deleteShapesFromDB(roomId, ids);
        }
        state.selectedIds.clear();
-       clearCanvas(useCanvasStore.getState().shapes, state.selectedIds, canvas, ctx);
+       clearCanvas(useCanvasStore.getState().shapes, state.selectedIds, canvas, ctx, currentViewport());
     }
     if ((e.metaKey || e.ctrlKey) && e.key === "a") {
        e.preventDefault();
        const store = useCanvasStore.getState();
        state.selectedIds = new Set(store.shapes.map(s => s.id));
-       clearCanvas(store.shapes, state.selectedIds, canvas, ctx);
+       clearCanvas(store.shapes, state.selectedIds, canvas, ctx, currentViewport());
+    }
+  };
+
+  // Plain wheel/trackpad-scroll pans; Ctrl/Cmd+wheel (also how Chrome/Firefox report a
+  // trackpad pinch gesture) zooms, anchored so the world point under the cursor stays
+  // under the cursor — the standard "zoom toward the mouse" feel, not zoom-toward-origin.
+  const handleWheel = (event: WheelEvent) => {
+    event.preventDefault();
+    const store = useCanvasStore.getState();
+
+    if (event.ctrlKey || event.metaKey) {
+      const oldZoom = store.zoom;
+      const zoomFactor = Math.exp(-event.deltaY * 0.01);
+      const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, oldZoom * zoomFactor));
+      if (newZoom === oldZoom) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const worldBefore = worldPoint(event.clientX, event.clientY);
+      state.panX = (event.clientX - rect.left) - worldBefore.x * newZoom;
+      state.panY = (event.clientY - rect.top) - worldBefore.y * newZoom;
+
+      store.setZoom(newZoom); // reactive, for the toolbar's % readout
+      clearCanvas(store.shapes, state.selectedIds, canvas, ctx, { panX: state.panX, panY: state.panY, zoom: newZoom });
+    } else {
+      state.panX -= event.deltaX;
+      state.panY -= event.deltaY;
+      clearCanvas(store.shapes, state.selectedIds, canvas, ctx, currentViewport());
     }
   };
 
@@ -449,5 +438,6 @@ export function createEventHandlers(
     handleMouseUp,
     handleKeyDown,
     handleDoubleClick,
+    handleWheel,
   };
 }

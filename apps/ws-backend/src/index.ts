@@ -7,6 +7,7 @@ import prisma from "@repo/db/client";
 import Redis from "ioredis";
 import { Kafka } from "kafkajs";
 import { z } from "zod";
+import * as http from "http";
 
 const CanvasEventSchema = z.object({
   eventId: z.string(),
@@ -31,7 +32,34 @@ const kafka = new Kafka({
 const producer = kafka.producer();
 producer.connect().catch(e => console.error("Kafka connect error", e));
 
-const wss = new WebSocketServer({ port: 8080 });
+// Real, in-process counters for the control-center dashboard. Reset on restart —
+// an honest "since this process last started" snapshot, not a durable metrics store.
+const startedAt = Date.now();
+const metrics = {
+  messagesProcessed: 0,
+  errorsSent: 0,
+  cacheHits: 0,
+  cacheMisses: 0,
+};
+
+// The WS server and its /health + /metrics HTTP endpoints share one underlying
+// http.Server on the same port (8080) — passing `server` instead of `port` to
+// WebSocketServer is what makes that possible; ws only takes over the upgrade path.
+const httpServer = http.createServer((req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  if (req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", uptimeMs: Date.now() - startedAt, connections: users.length }));
+  } else if (req.url === "/metrics") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ uptimeMs: Date.now() - startedAt, connections: users.length, ...metrics }));
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+const wss = new WebSocketServer({ server: httpServer });
+httpServer.listen(8080);
 
 interface User {
   id: string | null;
@@ -100,11 +128,45 @@ const interval = setInterval(() => {
 
 wss.on("close", () => clearInterval(interval));
 
+// Helper: Room sequence counter (Redis INCR), reseeded from durable history on cold start.
+//
+// Every client caches the sequenceNumber of the last update it applied to each shape, and
+// rejects any incoming update whose sequenceNumber is lower as "stale" (see network.ts).
+// Redis here only snapshots to disk periodically (no AOF), so a restart between snapshots
+// can roll `room_seq:{roomId}` back to an old, low value — after which every client
+// permanently rejects updates to shapes it already knew about, since the "fresh" sequence
+// numbers issued post-restart are all lower than what it cached before the restart. Only
+// brand-new shapes (no cached sequenceNumber yet) are unaffected, which is exactly the
+// "old shapes stop syncing, new ones are fine" symptom this fixes.
+//
+// Fix: the first time this counter is touched after a cold start, seed it from the room's
+// own durable max Chat.id (Postgres, never resets) before incrementing, so it can never
+// hand out a number lower than history already implies. SETNX makes the seed race-safe
+// under concurrent messages arriving right as Redis comes back up.
+async function nextRoomSequence(roomId: number): Promise<number> {
+  const seqKey = `room_seq:${roomId}`;
+  const alreadySeeded = await redis.exists(seqKey);
+  if (!alreadySeeded) {
+    const { _max } = await prisma.chat.aggregate({ where: { roomId }, _max: { id: true } });
+    await redis.set(seqKey, _max.id || 0, "NX");
+  }
+  return redis.incr(seqKey);
+}
+
+function sendError(ws: WebSocket, message: string) {
+  metrics.errorsSent++;
+  ws.send(JSON.stringify({ type: "error", message }));
+}
+
 // Helper: Ephemeral Room State Cache
 async function getCachedRoom(roomId: string) {
   const cacheKey = `room_cache:${roomId}`;
   const cached = await redis.get(cacheKey);
-  if (cached) return JSON.parse(cached);
+  if (cached) {
+    metrics.cacheHits++;
+    return JSON.parse(cached);
+  }
+  metrics.cacheMisses++;
 
   const room = await prisma.room.findFirst({ 
     where: { OR: [{ slug: roomId }, { viewSlug: roomId }, { collabSlug: roomId }] },
@@ -187,21 +249,29 @@ wss.on("connection", function connection(ws, request) {
       
       const room = await getCachedRoom(roomId);
       if (room) {
+        // IMPORTANT: filter/order by the `sequenceNumber` column, not the row `id`.
+        // `id` is a Postgres-wide autoincrement shared across every room; `sequenceNumber`
+        // is the per-room counter from nextRoomSequence, the same one live "chat" events
+        // are numbered with. A client's `lastSequenceNumber` cursor — and every shape's
+        // cached sequenceNumber used for stale-update rejection in network.ts — live in
+        // that per-room space. Comparing them against `id` instead handed out numbers
+        // wildly out of step with what clients had cached, which made every future live
+        // update to an already-synced shape look "stale" and get silently dropped.
         const missedChats = await prisma.chat.findMany({
           where: {
             roomId: room.id,
-            id: { gt: lastSequenceNumber } // In Phase 3 we treat ID as sequence
+            sequenceNumber: { gt: lastSequenceNumber }
           },
-          orderBy: { id: 'asc' }
+          orderBy: { sequenceNumber: 'asc' }
         });
-        
+
         missedChats.forEach(chat => {
           ws.send(JSON.stringify({
             type: "chat",
             message: chat.message,
             roomId: roomId,
             senderId: chat.userId,
-            sequenceNumber: chat.id,
+            sequenceNumber: chat.sequenceNumber,
           }));
         });
       }
@@ -209,11 +279,12 @@ wss.on("connection", function connection(ws, request) {
 
 
     if (parsedData.type === "chat") {
+      metrics.messagesProcessed++;
       const message = parsedData.message;
       const roomId = parsedData.roomId;
 
       if (!userId) {
-        ws.send(JSON.stringify({ type: "error", message: "Sign in to share or collaborate" }));
+        sendError(ws, "Sign in to share or collaborate");
         return;
       }
 
@@ -223,7 +294,7 @@ wss.on("connection", function connection(ws, request) {
         payload = JSON.parse(message);
         CanvasEventSchema.parse(payload);
       } catch(e) {
-        ws.send(JSON.stringify({ type: "error", message: "Malformed or invalid payload." }));
+        sendError(ws, "Malformed or invalid payload.");
         return;
       }
 
@@ -233,7 +304,7 @@ wss.on("connection", function connection(ws, request) {
       if (requests === 1) await redis.expire(rateLimitKey, 1);
       
       if (requests > 50) {
-        ws.send(JSON.stringify({ type: "error", message: "Rate limit exceeded." }));
+        sendError(ws, "Rate limit exceeded.");
         return;
       }
 
@@ -252,12 +323,12 @@ wss.on("connection", function connection(ws, request) {
       const room = await getCachedRoom(roomId);
       if (room) {
         if (room.viewSlug === roomId) {
-          ws.send(JSON.stringify({ type: "error", message: "Cannot edit using a view link" }));
+          sendError(ws, "Cannot edit using a view link");
           return;
         }
 
         // Generate strict sequence number via Redis for the room
-        const sequenceNumber = await redis.incr(`room_seq:${room.id}`);
+        const sequenceNumber = await nextRoomSequence(room.id);
 
         // DISTRIBUTED PUB/SUB BROADCAST (Fast path)
         pub.publish("canvas_events", JSON.stringify({
